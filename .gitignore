@@ -1,0 +1,10 @@
+# Build output
+/carbonate
+/dist/
+*.test
+
+# Local state — these hold credentials and decrypted user data.
+# Never commit them.
+auth.json
+calcache-*.json
+/state/
