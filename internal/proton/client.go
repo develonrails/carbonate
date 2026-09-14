@@ -18,8 +18,8 @@ import (
 )
 
 // ErrWrongMailboxPassword means the password did not unlock any of the user's
-// keys. Proton cannot tell us this directly: the unlock happens locally, and
-// go-proton-api skips keys it fails to open rather than reporting an error.
+// keys. Proton cannot tell us this directly, because the unlock happens
+// locally.
 var ErrWrongMailboxPassword = errors.New("mailbox password did not unlock any keys")
 
 // ErrFIDO2Unsupported is returned for accounts whose only second factor is a
@@ -89,7 +89,10 @@ func newManager() *api.Manager {
 // persisted. It verifies the mailbox password before returning, so a stored
 // session is always one that actually works.
 func Login(ctx context.Context, username string, loginPassword []byte, p Prompter) (*session.Session, error) {
-	m := newManager()
+	m, err := newAnonymousManager(ctx)
+	if err != nil {
+		return nil, err
+	}
 	defer m.Close()
 
 	c, auth, err := m.NewClientWithLogin(ctx, username, loginPassword)
@@ -190,8 +193,10 @@ func Resume(ctx context.Context, s *session.Session, persist PersistFunc) (*Conn
 
 // unlock derives the salted key passphrase and opens the user's keyring.
 //
-// Keys.Unlock skips keys it cannot open and still returns a nil error, so an
-// empty keyring — not an error — is how a wrong password shows up.
+// A wrong mailbox password surfaces here rather than at the API: keys are
+// unlocked locally. Current go-proton-api reports it as "not able to unlock
+// any key"; older versions returned an empty keyring with a nil error, so
+// both are treated as the same thing.
 func unlock(ctx context.Context, c *api.Client, user api.User, mailboxPassword []byte) (*crypto.KeyRing, error) {
 	salts, err := c.GetSalts(ctx)
 	if err != nil {
@@ -205,7 +210,8 @@ func unlock(ctx context.Context, c *api.Client, user api.User, mailboxPassword [
 
 	userKR, err := user.Keys.Unlock(saltedPassword, nil)
 	if err != nil {
-		return nil, fmt.Errorf("unlocking user keys: %w", err)
+		// Unlock's only realistic failure is that no key opened.
+		return nil, fmt.Errorf("%w: %v", ErrWrongMailboxPassword, err)
 	}
 
 	if userKR == nil || userKR.CountDecryptionEntities() == 0 {

@@ -4,13 +4,27 @@
 
 | Concern | Library | Status |
 |---|---|---|
-| Proton API client, event loop | `github.com/ProtonMail/go-proton-api` | in use (v0.4.0) |
+| Proton API client, event loop | `github.com/ProtonMail/go-proton-api` | in use (master pseudo-version) |
 | SRP authentication | `github.com/ProtonMail/go-srp` | via go-proton-api |
 | OpenPGP | `github.com/ProtonMail/gopenpgp/v2` | via go-proton-api |
 | CalDAV/CardDAV server | `github.com/emersion/go-webdav` | not yet added |
 | iCalendar / vCard parsing | `github.com/emersion/go-ical`, `go-vcard` | not yet added |
 
-### What go-proton-api v0.4.0 actually gives us
+### Pinning go-proton-api
+
+**Do not run `go get github.com/ProtonMail/go-proton-api@latest`.** The newest
+tag is v0.4.0, from 2022, but development continued on `master` without tagging.
+Go's version ordering treats the current `v0.0.0-2026...` pseudo-version as
+*older* than v0.4.0, so `@latest` silently downgrades you by four years. Use
+`@master`.
+
+v0.4.0 cannot log in at all any more — see the anonymous session below.
+
+go-proton-api also depends on **Proton's fork of resty** via a `replace`
+directive. Go ignores `replace` in dependencies, so our `go.mod` repeats it;
+without it the build fails on missing multipart-stream APIs.
+
+### What go-proton-api actually gives us
 
 Worth knowing before planning the write path:
 
@@ -83,10 +97,18 @@ DAV `ctag` / `sync-token` so clients fetch just the delta.
 
 ## Gotchas found the hard way
 
-- **`Keys.Unlock` reports success on a wrong password.** It skips keys it
-  cannot open and returns a nil error, so a bad mailbox password yields an
-  empty keyring rather than a failure. Always check
-  `CountDecryptionEntities() == 0`.
+- **Logging in needs an anonymous session first.** Proton now answers
+  `/auth/v4/info` with `401 Invalid access token` unless the request already
+  belongs to a session — even though logging in is by definition
+  unauthenticated. `POST /auth/v4/sessions` returns one; its UID and access
+  token go on every manager-level request. go-proton-api does not do this
+  itself, so `internal/proton/unauth.go` does. This is why v0.4.0 is unusable
+  against production, and it is invisible until you try a real account: the
+  fake test server predates the change.
+- **`Keys.Unlock` used to report success on a wrong password**, skipping keys
+  it could not open and returning a nil error. Current master returns "not able
+  to unlock any key" instead. `unlock` handles both, and still checks
+  `CountDecryptionEntities()`.
 - **Refresh tokens rotate.** Proton discards the old token the moment it issues
   a new one, so `Resume` persists before doing anything else that can fail, and
   registers an auth handler for later refreshes. Dropping a rotated token locks

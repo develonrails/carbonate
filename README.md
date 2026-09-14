@@ -4,9 +4,10 @@ A third-party CalDAV and CardDAV bridge for Proton Calendar and Proton Contacts,
 so standards-compliant clients — Thunderbird, Evolution, Calendar.app, DAVx5 —
 can talk to Proton.
 
-> **Status: early.** Authentication works — `carbonate auth` logs in to Proton,
-> unlocks your keys and stores an encrypted session, and `carbonate serve`
-> resumes it. The CalDAV and CardDAV endpoints themselves are not built yet.
+> **Status: early.** Authentication works and is **verified against live
+> Proton**: `carbonate auth` logs in, unlocks your keys and stores an encrypted
+> session, and `carbonate serve` resumes it and reaches your calendars and
+> contacts. The CalDAV and CardDAV endpoints themselves are not built yet.
 > See [Roadmap](#roadmap).
 
 ## Why
@@ -92,6 +93,8 @@ revocation are all exercised without a real account or network access.
 - [x] SRP login and TOTP two-factor
 - [x] Two-password mode (separate mailbox password)
 - [x] Encrypted session at rest, rotated refresh tokens persisted
+- [x] Anonymous session handshake (Proton rejects logins without one)
+- [x] Unattended login via `--password-stdin`
 - [ ] Human-verification (CAPTCHA) challenge
 - [ ] Contacts: decrypt, reassemble, serve over CardDAV (read)
 - [ ] Calendar: decrypt, reassemble, serve over CalDAV (read)

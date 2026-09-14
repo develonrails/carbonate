@@ -68,6 +68,11 @@ Usage:
   carbonate serve             serve CalDAV and CardDAV on localhost
   carbonate version           print the version
 
+Unattended login reads answers from stdin, one line at a time, in the order
+they are asked (password, then any two-factor code):
+
+  carbonate auth alice@proton.me --password-stdin < secret-file
+
 Environment:
   CARBONATE_BRIDGE_PASSWORD   bridge password, to run unattended
   CARBONATE_APP_VERSION       client version reported to Proton
@@ -82,6 +87,7 @@ func cmdAuth(ctx context.Context, args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("auth", flag.ContinueOnError)
 	fs.SetOutput(out)
 	path := fs.String("session", "", "path to the session file (default: user config dir)")
+	passwordStdin := fs.Bool("password-stdin", false, "read the password, and any further answers, from stdin one line at a time")
 
 	if err := fs.Parse(reorderArgs(args, authFlagsWithValues)); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -101,7 +107,10 @@ func cmdAuth(ctx context.Context, args []string, out io.Writer) error {
 		return err
 	}
 
-	p := terminalPrompter{}
+	var p proton.Prompter = terminalPrompter{}
+	if *passwordStdin {
+		p = newStdinPrompter(os.Stdin)
+	}
 
 	loginPassword, err := p.Password(fmt.Sprintf("Proton password for %s: ", username))
 	if err != nil {
