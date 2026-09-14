@@ -5,8 +5,9 @@ import "strings"
 // Flags that consume the following argument as their value. reorderArgs needs
 // this to avoid mistaking a flag's value for a positional argument.
 var (
-	authFlagsWithValues  = map[string]bool{"session": true}
-	serveFlagsWithValues = map[string]bool{"session": true, "addr": true}
+	authFlagsWithValues      = map[string]bool{"session": true}
+	serveFlagsWithValues     = map[string]bool{"session": true, "addr": true}
+	calendarsFlagsWithValues = map[string]bool{"session": true}
 )
 
 // reorderArgs moves positional arguments behind flags.

@@ -49,6 +49,8 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 		return cmdAuth(ctx, args[1:], out)
 	case "serve":
 		return cmdServe(ctx, args[1:], out)
+	case "calendars":
+		return cmdCalendars(ctx, args[1:], out)
 	case "version":
 		fmt.Fprintln(out, version)
 		return nil
@@ -66,6 +68,7 @@ func usage(w io.Writer) {
 Usage:
   carbonate auth <username>   log in to Proton and store an encrypted session
   carbonate serve             serve CalDAV and CardDAV on localhost
+  carbonate calendars         list calendars, and optionally their events
   carbonate version           print the version
 
 Unattended login reads answers from stdin, one line at a time, in the order
@@ -161,28 +164,7 @@ func cmdServe(ctx context.Context, args []string, out io.Writer) error {
 		return err
 	}
 
-	sessionPath, err := resolvePath(*path)
-	if err != nil {
-		return err
-	}
-
-	bridgePassword := os.Getenv("CARBONATE_BRIDGE_PASSWORD")
-	if bridgePassword == "" {
-		buf, err := terminalPrompter{}.Password("Bridge password: ")
-		if err != nil {
-			return err
-		}
-		bridgePassword = string(buf)
-	}
-
-	sess, err := session.Load(sessionPath, bridgePassword)
-	if err != nil {
-		return err
-	}
-
-	store := &sessionStore{path: sessionPath, password: bridgePassword, sess: sess}
-
-	conn, err := proton.Resume(ctx, sess, store.persist)
+	conn, err := connect(ctx, *path)
 	if err != nil {
 		return err
 	}
@@ -239,4 +221,32 @@ func (s *sessionStore) persist(uid, refreshToken string) error {
 	s.sess.RefreshToken = refreshToken
 
 	return session.Save(s.path, s.password, s.sess)
+}
+
+// connect loads the stored session and resumes it, prompting for the bridge
+// password unless CARBONATE_BRIDGE_PASSWORD is set.
+func connect(ctx context.Context, pathOverride string) (*proton.Conn, error) {
+	sessionPath, err := resolvePath(pathOverride)
+	if err != nil {
+		return nil, err
+	}
+
+	bridgePassword := os.Getenv("CARBONATE_BRIDGE_PASSWORD")
+	if bridgePassword == "" {
+		buf, err := terminalPrompter{}.Password("Bridge password: ")
+		if err != nil {
+			return nil, err
+		}
+
+		bridgePassword = string(buf)
+	}
+
+	sess, err := session.Load(sessionPath, bridgePassword)
+	if err != nil {
+		return nil, err
+	}
+
+	store := &sessionStore{path: sessionPath, password: bridgePassword, sess: sess}
+
+	return proton.Resume(ctx, sess, store.persist)
 }

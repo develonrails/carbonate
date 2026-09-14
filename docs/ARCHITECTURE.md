@@ -32,6 +32,11 @@ Worth knowing before planning the write path:
   `GetCalendarPassphrase`, `GetCalendarEvents` and friends exist, but there is
   no create, update or delete. The CalDAV write path will need endpoints we
   call ourselves.
+- **Its structs have drifted from the live API.** `Calendar.Name` is the
+  clearest case: the field no longer exists at the top level, so `GetCalendars`
+  returns every calendar unnamed. `Conn.Get` exists for exactly this — raw
+  authenticated requests decoded into our own structs. Expect to need it more
+  as the API moves on.
 - **Contacts have full CRUD** — `CreateContacts`, `UpdateContact`,
   `DeleteContacts`. CardDAV can be complete on this library alone.
 - **Drive is partly there** (`ListVolumes`, `ListShares`, `GetLink`,
@@ -56,6 +61,28 @@ rescanning; we want that patch too.
   path token so DAV requests resolve to Proton IDs in O(1). Files are 0600.
 - `internal/caldav` — CalDAV backend over Proton Calendar.
 - `internal/carddav` — CardDAV backend over Proton Contacts.
+
+## Verified against a live account
+
+The read path is not theoretical. Against a real Proton account with one
+all-day event, carbonate decrypts and reassembles:
+
+```
+Test kalender! — 1 event(s)
+  2026-09-15 (all day)  Test!
+```
+
+The event arrives in three encrypted pieces, each its own complete VCALENDAR:
+
+| Part | Type | Contents |
+|---|---|---|
+| `SharedEvents[0]` | signed, cleartext | `UID`, `DTSTAMP`, `DTSTART;VALUE=DATE`, `SEQUENCE` |
+| `SharedEvents[1]` | encrypted + signed | `SUMMARY` |
+| `CalendarEvents[0]` | signed, cleartext | `STATUS` |
+
+Reassembly merges the VEVENT bodies and drops the duplicated wrappers — `UID`
+and `DTSTAMP` repeat in every part and must appear once, while `ATTENDEE` and
+`EXDATE` legitimately repeat and must not be deduplicated.
 
 ## Proton's data model
 
@@ -117,6 +144,21 @@ DAV `ctag` / `sync-token` so clients fetch just the delta.
   recognise, so `CARBONATE_APP_VERSION` exists as an escape hatch.
 - **The fake server serves TLS by default** with a self-signed certificate that
   go-proton-api refuses. Tests use `server.WithTLS(false)`.
+- **Calendar names are not encrypted.** Almost everything in Proton Calendar
+  is, so this surprises. The name lives in plaintext on the *member* record —
+  `Calendars[].Members[].Name` — not on the calendar, because a shared calendar
+  lets each participant name it for themselves. Pick the member whose email is
+  one of yours.
+- **`GetAllCalendarEvents` cannot be used.** It pages at go-proton-api's
+  library-wide `maxPageSize` of 150, which the calendar endpoint rejects with
+  "Invalid page size parameter" (code 2021). `internal/calendar` pages by hand
+  at 100.
+- **A full-day event starts at midnight UTC.** Rendering that in the local zone
+  shows a spurious time, and the wrong date west of Greenwich. Check `FullDay`
+  before formatting.
+- **`CARBONATE_DEBUG=1`** dumps full requests and responses. It is how the two
+  findings above were diagnosed, and it prints access tokens, so keep it off
+  by default.
 
 ## Known hard parts
 

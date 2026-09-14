@@ -7,9 +7,13 @@ package proton
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
+	"strings"
+	"sync"
 
 	api "github.com/ProtonMail/go-proton-api"
 	"github.com/ProtonMail/gopenpgp/v2/crypto"
@@ -62,6 +66,134 @@ type Conn struct {
 	// UserKR is the unlocked user keyring. Address and calendar keys are
 	// unlocked through it, not directly from the mailbox password.
 	UserKR *crypto.KeyRing
+
+	// saltedKeyPass is the mailbox password after salting. Modern address keys
+	// carry a token that the user keyring opens, but legacy ones still need
+	// this passphrase directly.
+	saltedKeyPass []byte
+
+	// Credentials for raw requests, kept current as Proton rotates them.
+	mu          sync.RWMutex
+	uid         string
+	accessToken string
+}
+
+// setCredentials records the tokens used for raw requests.
+func (c *Conn) setCredentials(uid, accessToken string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.uid, c.accessToken = uid, accessToken
+}
+
+// Get performs an authenticated GET against a Proton API path and decodes the
+// JSON response into out.
+//
+// go-proton-api's structs have drifted from the live API — a calendar's name,
+// for example, moved into the member object and is no longer decoded at all —
+// so carbonate occasionally needs the response as Proton actually sends it.
+func (c *Conn) Get(ctx context.Context, path string, out any) error {
+	c.mu.RLock()
+	uid, token := c.uid, c.accessToken
+	c.mu.RUnlock()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, hostURL()+path, nil)
+	if err != nil {
+		return fmt.Errorf("building request for %s: %w", path, err)
+	}
+
+	req.Header.Set("x-pm-appversion", appVersion())
+	req.Header.Set("x-pm-uid", uid)
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("requesting %s: %w", path, err)
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusOK {
+		return fmt.Errorf("requesting %s: unexpected status %s", path, res.Status)
+	}
+
+	if err := json.NewDecoder(res.Body).Decode(out); err != nil {
+		return fmt.Errorf("decoding %s: %w", path, err)
+	}
+
+	return nil
+}
+
+// AddressKeyRing unlocks the keys of a single address.
+func (c *Conn) AddressKeyRing(addr api.Address) (*crypto.KeyRing, error) {
+	kr, err := addr.Keys.Unlock(c.saltedKeyPass, c.UserKR)
+	if err != nil {
+		return nil, fmt.Errorf("unlocking keys for %s: %w", addr.Email, err)
+	}
+
+	if kr == nil || kr.CountDecryptionEntities() == 0 {
+		return nil, fmt.Errorf("no usable keys for address %s", addr.Email)
+	}
+
+	return kr, nil
+}
+
+// CalendarKeyRing unlocks a calendar's keys and returns them together with the
+// address keyring that owns the membership.
+//
+// A calendar key is wrapped in a passphrase that is encrypted to a member's
+// address key, so the address keyring is needed both to get in and, later, to
+// verify the signatures on event parts.
+func (c *Conn) CalendarKeyRing(ctx context.Context, calendarID string) (calKR, addrKR *crypto.KeyRing, err error) {
+	members, err := c.Client.GetCalendarMembers(ctx, calendarID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("fetching calendar members: %w", err)
+	}
+
+	addresses, err := c.Client.GetAddresses(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("fetching addresses: %w", err)
+	}
+
+	// Membership is recorded by email, so pair it back up with our address.
+	var member api.CalendarMember
+	var addr api.Address
+
+	for _, m := range members {
+		for _, a := range addresses {
+			if strings.EqualFold(m.Email, a.Email) {
+				member, addr = m, a
+			}
+		}
+	}
+
+	if member.ID == "" {
+		return nil, nil, fmt.Errorf("no membership of calendar %s belongs to this account", calendarID)
+	}
+
+	if addrKR, err = c.AddressKeyRing(addr); err != nil {
+		return nil, nil, err
+	}
+
+	passphrase, err := c.Client.GetCalendarPassphrase(ctx, calendarID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("fetching calendar passphrase: %w", err)
+	}
+
+	raw, err := passphrase.Decrypt(member.ID, addrKR)
+	if err != nil {
+		return nil, nil, fmt.Errorf("decrypting calendar passphrase: %w", err)
+	}
+
+	keys, err := c.Client.GetCalendarKeys(ctx, calendarID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("fetching calendar keys: %w", err)
+	}
+
+	if calKR, err = keys.Unlock(raw); err != nil {
+		return nil, nil, fmt.Errorf("unlocking calendar keys: %w", err)
+	}
+
+	return calKR, addrKR, nil
 }
 
 // Close releases the client and its underlying manager.
@@ -80,6 +212,13 @@ func newManager() *api.Manager {
 
 	if u := apiURL(); u != "" {
 		opts = append(opts, api.WithHostURL(u))
+	}
+
+	// CARBONATE_DEBUG dumps full requests and responses, including access
+	// tokens and encrypted payloads. For diagnosing API drift, not for
+	// everyday use.
+	if os.Getenv("CARBONATE_DEBUG") != "" {
+		opts = append(opts, api.WithDebug(true))
 	}
 
 	return api.New(opts...)
@@ -131,7 +270,7 @@ func Login(ctx context.Context, username string, loginPassword []byte, p Prompte
 		return nil, fmt.Errorf("fetching user: %w", err)
 	}
 
-	if _, err := unlock(ctx, c, user, mailboxPassword); err != nil {
+	if _, _, err := unlock(ctx, c, user, mailboxPassword); err != nil {
 		return nil, err
 	}
 
@@ -168,7 +307,12 @@ func Resume(ctx context.Context, s *session.Session, persist PersistFunc) (*Conn
 		return nil, fmt.Errorf("persisting refreshed token: %w", err)
 	}
 
+	conn := &Conn{Manager: m, Client: c}
+	conn.setCredentials(auth.UID, auth.AccessToken)
+
 	c.AddAuthHandler(func(a api.Auth) {
+		conn.setCredentials(a.UID, a.AccessToken)
+
 		if err := persist(a.UID, a.RefreshToken); err != nil {
 			fmt.Fprintf(os.Stderr, "carbonate: failed to persist refreshed token: %v\n", err)
 		}
@@ -181,14 +325,17 @@ func Resume(ctx context.Context, s *session.Session, persist PersistFunc) (*Conn
 		return nil, fmt.Errorf("fetching user: %w", err)
 	}
 
-	userKR, err := unlock(ctx, c, user, s.MailboxPassword)
+	userKR, salted, err := unlock(ctx, c, user, s.MailboxPassword)
 	if err != nil {
 		c.Close()
 		m.Close()
 		return nil, err
 	}
 
-	return &Conn{Manager: m, Client: c, UserKR: userKR}, nil
+	conn.UserKR = userKR
+	conn.saltedKeyPass = salted
+
+	return conn, nil
 }
 
 // unlock derives the salted key passphrase and opens the user's keyring.
@@ -197,26 +344,26 @@ func Resume(ctx context.Context, s *session.Session, persist PersistFunc) (*Conn
 // unlocked locally. Current go-proton-api reports it as "not able to unlock
 // any key"; older versions returned an empty keyring with a nil error, so
 // both are treated as the same thing.
-func unlock(ctx context.Context, c *api.Client, user api.User, mailboxPassword []byte) (*crypto.KeyRing, error) {
+func unlock(ctx context.Context, c *api.Client, user api.User, mailboxPassword []byte) (*crypto.KeyRing, []byte, error) {
 	salts, err := c.GetSalts(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("fetching key salts: %w", err)
+		return nil, nil, fmt.Errorf("fetching key salts: %w", err)
 	}
 
 	saltedPassword, err := salts.SaltForKey(mailboxPassword, user.Keys.Primary().ID)
 	if err != nil {
-		return nil, fmt.Errorf("salting mailbox password: %w", err)
+		return nil, nil, fmt.Errorf("salting mailbox password: %w", err)
 	}
 
 	userKR, err := user.Keys.Unlock(saltedPassword, nil)
 	if err != nil {
 		// Unlock's only realistic failure is that no key opened.
-		return nil, fmt.Errorf("%w: %v", ErrWrongMailboxPassword, err)
+		return nil, nil, fmt.Errorf("%w: %v", ErrWrongMailboxPassword, err)
 	}
 
 	if userKR == nil || userKR.CountDecryptionEntities() == 0 {
-		return nil, ErrWrongMailboxPassword
+		return nil, nil, ErrWrongMailboxPassword
 	}
 
-	return userKR, nil
+	return userKR, saltedPassword, nil
 }

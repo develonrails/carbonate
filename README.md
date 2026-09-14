@@ -4,11 +4,11 @@ A third-party CalDAV and CardDAV bridge for Proton Calendar and Proton Contacts,
 so standards-compliant clients — Thunderbird, Evolution, Calendar.app, DAVx5 —
 can talk to Proton.
 
-> **Status: early.** Authentication works and is **verified against live
-> Proton**: `carbonate auth` logs in, unlocks your keys and stores an encrypted
-> session, and `carbonate serve` resumes it and reaches your calendars and
-> contacts. The CalDAV and CardDAV endpoints themselves are not built yet.
-> See [Roadmap](#roadmap).
+> **Status: early, but it reads your calendar.** Verified against live Proton:
+> `carbonate auth` logs in and stores an encrypted session, and
+> `carbonate calendars` decrypts your events and reassembles them into valid
+> iCalendar. The CalDAV and CardDAV endpoints that would expose this to a
+> client are not built yet. See [Roadmap](#roadmap).
 
 ## Why
 
@@ -47,8 +47,9 @@ Proton's data model happens to be the DAV formats already:
   `AttendeesEvents` and `PersonalEvents`, each with signed and encrypted
   sections under a per-calendar key.
 
-Reading means reassembling those parts. Writing means splitting them back apart
-correctly — which is where the real work is.
+Reading means reassembling those parts, which carbonate now does. Writing means
+splitting them back apart correctly — which is where the real work is, and
+go-proton-api offers no calendar write endpoints at all.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detail.
 
@@ -64,7 +65,14 @@ make build      # or: go build ./cmd/carbonate
 
 ```sh
 carbonate auth <username>   # log in to Proton, store an encrypted session
+carbonate calendars         # list calendars; --events to show them, --ics for raw iCalendar
 carbonate serve             # serve CalDAV and CardDAV on 127.0.0.1:8080
+```
+
+```console
+$ carbonate calendars --events
+Test kalender! — 1 event(s)
+  2026-09-15 (all day)  Test!
 ```
 
 `auth` prints a randomly generated **bridge password** once. It encrypts the
@@ -74,7 +82,9 @@ Point your client at `http://127.0.0.1:8080` with your Proton username and that
 bridge password. HTTP is deliberately unencrypted: the listener binds to
 loopback only.
 
-Set `CARBONATE_BRIDGE_PASSWORD` to run `serve` unattended.
+Set `CARBONATE_BRIDGE_PASSWORD` to run unattended, and `CARBONATE_DEBUG=1` to
+dump every request and response when the API misbehaves — it prints access
+tokens, so leave it off otherwise.
 
 ## Testing
 
@@ -96,8 +106,9 @@ revocation are all exercised without a real account or network access.
 - [x] Anonymous session handshake (Proton rejects logins without one)
 - [x] Unattended login via `--password-stdin`
 - [ ] Human-verification (CAPTCHA) challenge
-- [ ] Contacts: decrypt, reassemble, serve over CardDAV (read)
-- [ ] Calendar: decrypt, reassemble, serve over CalDAV (read)
+- [x] Calendar: fetch, decrypt and reassemble events into iCalendar
+- [ ] Contacts: decrypt and reassemble vCards
+- [ ] Serve it all over CalDAV and CardDAV
 - [ ] Event-loop poller and delta sync, mapped to DAV ctag / sync-token
 - [ ] Write path: create, edit, delete round-tripping to Proton
 - [ ] Recurrence exceptions and attendees
