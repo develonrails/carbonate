@@ -1,16 +1,31 @@
 # Architecture
 
-## Intended dependencies
+## Dependencies
 
-None of these are wired up yet; the scaffold is stdlib-only on purpose.
-
-| Concern | Library | Maintained by |
+| Concern | Library | Status |
 |---|---|---|
-| Proton API client, event loop | `github.com/ProtonMail/go-proton-api` | Proton |
-| SRP authentication | `github.com/ProtonMail/go-srp` | Proton |
-| OpenPGP | `github.com/ProtonMail/gopenpgp/v2` | Proton |
-| CalDAV/CardDAV server | `github.com/emersion/go-webdav` | emersion |
-| iCalendar / vCard parsing | `github.com/emersion/go-ical`, `go-vcard` | emersion |
+| Proton API client, event loop | `github.com/ProtonMail/go-proton-api` | in use (v0.4.0) |
+| SRP authentication | `github.com/ProtonMail/go-srp` | via go-proton-api |
+| OpenPGP | `github.com/ProtonMail/gopenpgp/v2` | via go-proton-api |
+| CalDAV/CardDAV server | `github.com/emersion/go-webdav` | not yet added |
+| iCalendar / vCard parsing | `github.com/emersion/go-ical`, `go-vcard` | not yet added |
+
+### What go-proton-api v0.4.0 actually gives us
+
+Worth knowing before planning the write path:
+
+- **Calendar is read-only.** `GetCalendars`, `GetCalendarKeys`,
+  `GetCalendarPassphrase`, `GetCalendarEvents` and friends exist, but there is
+  no create, update or delete. The CalDAV write path will need endpoints we
+  call ourselves.
+- **Contacts have full CRUD** — `CreateContacts`, `UpdateContact`,
+  `DeleteContacts`. CardDAV can be complete on this library alone.
+- **Drive is partly there** (`ListVolumes`, `ListShares`, `GetLink`,
+  `ListChildren`, `GetBlock`) — read-only, and out of scope for carbonate.
+- **A fake Proton server ships in `go-proton-api/server`.** It backs our auth
+  integration tests: real SRP, real key unlocking, no network and no account.
+  It does *not* implement the calendar endpoints, so calendar work will need
+  its own test doubles.
 
 `go-webdav` exposes CalDAV and CardDAV as backend interfaces — we implement
 `GetCalendarObject`, `PutCalendarObject` and friends, and it handles the
@@ -65,6 +80,21 @@ incorrectly.** This is the highest-risk area in the project.
 Proton exposes an event-loop endpoint returning deltas since a known event ID.
 Poll roughly every 30s, patch only changed items into the cache, and bump the
 DAV `ctag` / `sync-token` so clients fetch just the delta.
+
+## Gotchas found the hard way
+
+- **`Keys.Unlock` reports success on a wrong password.** It skips keys it
+  cannot open and returns a nil error, so a bad mailbox password yields an
+  empty keyring rather than a failure. Always check
+  `CountDecryptionEntities() == 0`.
+- **Refresh tokens rotate.** Proton discards the old token the moment it issues
+  a new one, so `Resume` persists before doing anything else that can fail, and
+  registers an auth handler for later refreshes. Dropping a rotated token locks
+  the user out until they log in again.
+- **The app version is validated.** Proton rejects clients it does not
+  recognise, so `CARBONATE_APP_VERSION` exists as an escape hatch.
+- **The fake server serves TLS by default** with a self-signed certificate that
+  go-proton-api refuses. Tests use `server.WithTLS(false)`.
 
 ## Known hard parts
 

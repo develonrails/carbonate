@@ -4,8 +4,10 @@ A third-party CalDAV and CardDAV bridge for Proton Calendar and Proton Contacts,
 so standards-compliant clients — Thunderbird, Evolution, Calendar.app, DAVx5 —
 can talk to Proton.
 
-> **Status: scaffold.** Nothing works yet. The commands parse their flags and
-> tell you they are not implemented. See [Roadmap](#roadmap).
+> **Status: early.** Authentication works — `carbonate auth` logs in to Proton,
+> unlocks your keys and stores an encrypted session, and `carbonate serve`
+> resumes it. The CalDAV and CardDAV endpoints themselves are not built yet.
+> See [Roadmap](#roadmap).
 
 ## Why
 
@@ -51,10 +53,10 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detail.
 
 ## Install
 
-Requires Go 1.22 or newer.
+Requires Go 1.26 or newer.
 
 ```sh
-go build ./cmd/carbonate
+make build      # or: go build ./cmd/carbonate
 ```
 
 ## Usage
@@ -64,19 +66,51 @@ carbonate auth <username>   # log in to Proton, store an encrypted session
 carbonate serve             # serve CalDAV and CardDAV on 127.0.0.1:8080
 ```
 
-Point your client at `http://127.0.0.1:8080` with your Proton username and the
-bridge password printed by `auth`. HTTP is deliberately unencrypted: the
-listener binds to loopback only.
+`auth` prints a randomly generated **bridge password** once. It encrypts the
+session file, and your DAV clients will use it as their password.
+
+Point your client at `http://127.0.0.1:8080` with your Proton username and that
+bridge password. HTTP is deliberately unencrypted: the listener binds to
+loopback only.
+
+Set `CARBONATE_BRIDGE_PASSWORD` to run `serve` unattended.
+
+## Testing
+
+```sh
+make test       # unit and integration tests
+make race       # the run that matters for concurrent token refresh
+make cover      # coverage summary
+```
+
+Auth is covered by integration tests against the fake Proton server that ships
+with go-proton-api, so login, key unlocking, token rotation and session
+revocation are all exercised without a real account or network access.
 
 ## Roadmap
 
-- [ ] SRP login, 2FA, human-verification challenge
-- [ ] Encrypted session at rest, **transparent token refresh**
+- [x] SRP login and TOTP two-factor
+- [x] Two-password mode (separate mailbox password)
+- [x] Encrypted session at rest, rotated refresh tokens persisted
+- [ ] Human-verification (CAPTCHA) challenge
 - [ ] Contacts: decrypt, reassemble, serve over CardDAV (read)
 - [ ] Calendar: decrypt, reassemble, serve over CalDAV (read)
 - [ ] Event-loop poller and delta sync, mapped to DAV ctag / sync-token
 - [ ] Write path: create, edit, delete round-tripping to Proton
 - [ ] Recurrence exceptions and attendees
+
+## Scope
+
+Calendar and contacts only.
+
+**Mail** is already handled by the official [Proton Mail
+Bridge](https://proton.me/mail/bridge), which is supported and does the job.
+
+**Files** are out of scope. Proton shipped an official [Drive
+CLI](https://proton.me/blog/proton-drive-cli) for Linux in June 2026, and
+[rclone](https://rclone.org/protondrive/) has had a Proton Drive backend for a
+while. File sync also wants WebDAV or a FUSE mount, not CalDAV — a different
+protocol and a different problem.
 
 ## Security and risk
 
