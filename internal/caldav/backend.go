@@ -67,7 +67,7 @@ func New(conn *proton.Conn, ttl time.Duration) *Backend {
 
 // Handler returns an http.Handler serving CalDAV for this backend.
 func (b *Backend) Handler() http.Handler {
-	return &caldav.Handler{Backend: b}
+	return compat(&caldav.Handler{Backend: b})
 }
 
 func (b *Backend) CurrentUserPrincipal(ctx context.Context) (string, error) {

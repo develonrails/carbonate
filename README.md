@@ -136,7 +136,7 @@ revocation are all exercised without a real account or network access.
 - [x] Calendar: fetch, decrypt and reassemble events into iCalendar
 - [x] Calendar: split, encrypt, sign and create events
 - [x] Calendar: update and delete events, with SEQUENCE handled correctly
-- [x] Serve calendars over CalDAV, read and write
+- [x] Serve calendars over CalDAV, read and write, from GNOME Calendar
 - [ ] Calendar: recurrence exceptions and attendees
 - [ ] `getctag` and sync-token, so clients need not re-read everything
 - [ ] Event-loop driven cache instead of a short TTL

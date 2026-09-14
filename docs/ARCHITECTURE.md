@@ -78,9 +78,26 @@ Two mappings are needed between Proton and URLs:
 Reads are cached for 30 seconds, and the cache is dropped whenever we write.
 That is a placeholder for driving it from Proton's event loop.
 
-`getctag` is missing from go-webdav 0.7.0, so clients re-read the object list
-on every sync rather than being told nothing changed. ETags still let them skip
-fetching individual events.
+### Making a client see a writable calendar
+
+GNOME Calendar connected on the first try but showed the calendar as
+read-only. Two deviations in go-webdav 0.7.0 cause it, and `compat.go`
+corrects both on the way out rather than forking the library:
+
+- **`<privilege><read/><write/></privilege>`.** RFC 3744 defines
+  `DAV:privilege` as holding a *single* privilege, so this is one malformed
+  element rather than two. A client reading only the first child sees `read`
+  and stops there. Each privilege now gets its own element.
+- **`Allow` omits `PUT`.** go-webdav answers OPTIONS on a collection with
+  `OPTIONS, PROPFIND, REPORT, DELETE, MKCOL`, which reads as a collection that
+  cannot be written to. `PUT`, `GET` and `HEAD` are added.
+
+`getctag` is missing too, so clients re-read the object list on every sync
+rather than being told nothing changed. ETags still let them skip fetching
+individual events.
+
+`supported-report-set` also answers 404, which is worth revisiting if a client
+fails to discover `calendar-query` or `sync-collection`.
 
 ## Packages
 
