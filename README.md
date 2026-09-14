@@ -4,9 +4,10 @@ A third-party CalDAV and CardDAV bridge for Proton Calendar and Proton Contacts,
 so standards-compliant clients — Thunderbird, Evolution, Calendar.app, DAVx5 —
 can talk to Proton.
 
-> **Status: CalDAV works.** `carbonate serve` exposes your Proton calendar to
-> a standard CalDAV client, with reads and writes verified against live Proton.
-> Contacts and CardDAV are not built yet. See [Roadmap](#roadmap).
+> **Status: calendars and contacts both work.** `carbonate serve` exposes
+> Proton Calendar over CalDAV and Proton Contacts over CardDAV, reads and
+> writes verified against live Proton. See [Roadmap](#roadmap) for what is
+> still missing — attendees, most notably.
 
 ## Why
 
@@ -68,7 +69,8 @@ carbonate auth <username>   # log in to Proton, store an encrypted session
 carbonate calendars         # list calendars; --events to show them, --ics for raw iCalendar
 carbonate event put         # create or replace an event from iCalendar on stdin
 carbonate event delete      # delete an event by its iCalendar UID
-carbonate serve             # serve CalDAV on 127.0.0.1:8080
+carbonate contacts          # list contacts; --vcard for the full vCard
+carbonate serve             # serve CalDAV and CardDAV on 127.0.0.1:8080
 ```
 
 ```console
@@ -93,17 +95,19 @@ exercised exactly as the DAV endpoint will use it.
 `auth` prints a randomly generated **bridge password** once. It encrypts the
 session file, and your DAV clients will use it as their password.
 
-### Connecting GNOME Calendar
+### Connecting a client
 
-With `carbonate serve` running:
+With `carbonate serve` running, sign in as your Proton address with the bridge
+password:
 
-1. **Calendars → Add calendar → Add from web**
-2. URL `http://127.0.0.1:8080/`
-3. Username: your Proton address. Password: the bridge password.
+| | |
+|---|---|
+| Calendar | `http://127.0.0.1:8080/caldav/` |
+| Contacts | `http://127.0.0.1:8080/carddav/` |
 
-Evolution, Thunderbird and DAVx5 take the same three values. `/` and
-`/.well-known/caldav` both redirect to the principal, so the bare address is
-enough.
+In GNOME Calendar: **Calendars → Add calendar → Add from web**. Evolution,
+Thunderbird and DAVx5 take the same three values. `/.well-known/caldav` and
+`/.well-known/carddav` both redirect to the right principal.
 
 HTTP is deliberately unencrypted: the listener binds to loopback only, and
 basic auth is there to stop other local processes reaching your calendar
@@ -140,7 +144,8 @@ revocation are all exercised without a real account or network access.
 - [ ] Calendar: recurrence exceptions and attendees
 - [ ] `getctag` and sync-token, so clients need not re-read everything
 - [ ] Event-loop driven cache instead of a short TTL
-- [ ] Contacts: decrypt, reassemble vCards, serve over CardDAV
+- [x] Contacts: decrypt, split, and serve over CardDAV
+- [ ] Attendees — currently accepted and then silently dropped by Proton
 - [ ] Event-loop poller and delta sync, mapped to DAV ctag / sync-token
 - [ ] Write path: create, edit, delete round-tripping to Proton
 - [ ] Recurrence exceptions and attendees

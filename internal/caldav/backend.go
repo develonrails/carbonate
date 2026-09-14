@@ -34,8 +34,9 @@ import (
 // Requests to "/" and /.well-known/caldav are redirected to the principal, so
 // a client only needs the bare address.
 const (
-	principalPath = "/principal/"
-	homeSetPath   = "/principal/calendars/"
+	prefix        = "/caldav"
+	principalPath = prefix + "/principal/"
+	homeSetPath   = principalPath + "calendars/"
 )
 
 // Backend serves one Proton account.
@@ -67,7 +68,7 @@ func New(conn *proton.Conn, ttl time.Duration) *Backend {
 
 // Handler returns an http.Handler serving CalDAV for this backend.
 func (b *Backend) Handler() http.Handler {
-	return compat(&caldav.Handler{Backend: b})
+	return compat(&caldav.Handler{Backend: b, Prefix: prefix})
 }
 
 func (b *Backend) CurrentUserPrincipal(ctx context.Context) (string, error) {
@@ -165,16 +166,25 @@ func (b *Backend) calendarID(ctx context.Context, p string) (string, error) {
 	return id, nil
 }
 
-// calendarSegment returns the calendar token from "/calendars/<token>/..." .
+// calendarSegment returns the calendar token from a path under the home set,
+// or "" for anything that does not live there.
+//
+// Returning the wrong segment rather than nothing would send a request to some
+// other calendar, so a path that does not match is rejected outright.
 func calendarSegment(p string) string {
-	trimmed := strings.TrimPrefix(path.Clean(p), strings.TrimSuffix(homeSetPath, "/"))
-	trimmed = strings.TrimPrefix(trimmed, "/")
+	clean := path.Clean(p) + "/"
 
-	if i := strings.Index(trimmed, "/"); i >= 0 {
-		return trimmed[:i]
+	if !strings.HasPrefix(clean, homeSetPath) {
+		return ""
 	}
 
-	return trimmed
+	rest := strings.TrimPrefix(clean, homeSetPath)
+
+	if i := strings.Index(rest, "/"); i >= 0 {
+		return rest[:i]
+	}
+
+	return rest
 }
 
 // objectUID returns the UID of the event stored at an object path.

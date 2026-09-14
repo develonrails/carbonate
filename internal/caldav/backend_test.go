@@ -10,11 +10,17 @@ import (
 
 func TestCalendarSegment(t *testing.T) {
 	tests := map[string]string{
-		"/principal/calendars/abc123/":          "abc123",
-		"/principal/calendars/abc123":           "abc123",
-		"/principal/calendars/abc123/event.ics": "abc123",
-		"/principal/calendars/":                 "",
-		"/principal/calendars":                  "",
+		homeSetPath + "abc123/":          "abc123",
+		homeSetPath + "abc123":           "abc123",
+		homeSetPath + "abc123/event.ics": "abc123",
+		homeSetPath:                      "",
+		principalPath:                    "",
+
+		// A path outside the home set must yield nothing rather than a
+		// segment that would address someone else's calendar.
+		"/carddav/principal/contacts/default/": "",
+		"/somewhere/else/abc123/":              "",
+		"/":                                    "",
 	}
 
 	for path, want := range tests {
@@ -54,7 +60,7 @@ func newBackend() *Backend {
 func TestObjectUIDUsesRememberedName(t *testing.T) {
 	b := newBackend()
 
-	path := "/principal/calendars/abc123/some-client-chosen-name.ics"
+	path := homeSetPath + "abc123/some-client-chosen-name.ics"
 	b.names[path] = "the-real-uid@example.com"
 
 	got, err := b.objectUID(path)
@@ -72,7 +78,7 @@ func TestObjectUIDUsesRememberedName(t *testing.T) {
 func TestObjectUIDFallsBackToFilename(t *testing.T) {
 	b := newBackend()
 
-	got, err := b.objectUID("/principal/calendars/abc123/event%40example.com.ics")
+	got, err := b.objectUID(homeSetPath + "abc123/event%40example.com.ics")
 	if err != nil {
 		t.Fatalf("objectUID: %v", err)
 	}
@@ -85,7 +91,7 @@ func TestObjectUIDFallsBackToFilename(t *testing.T) {
 func TestObjectUIDRejectsNonObject(t *testing.T) {
 	b := newBackend()
 
-	if _, err := b.objectUID("/principal/calendars/abc123/notanevent"); err == nil {
+	if _, err := b.objectUID(homeSetPath + "abc123/notanevent"); err == nil {
 		t.Error("a path without .ics was accepted as a calendar object")
 	}
 }

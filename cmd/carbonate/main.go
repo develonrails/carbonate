@@ -53,6 +53,8 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 		return cmdCalendars(ctx, args[1:], out)
 	case "event":
 		return cmdEvent(ctx, args[1:], out)
+	case "contacts":
+		return cmdContacts(ctx, args[1:], out)
 	case "version":
 		fmt.Fprintln(out, version)
 		return nil
@@ -73,6 +75,7 @@ Usage:
   carbonate calendars         list calendars, and optionally their events
   carbonate event put         create or replace an event from iCalendar on stdin
   carbonate event delete      delete an event by its iCalendar UID
+  carbonate contacts          list contacts, optionally as vCards
   carbonate version           print the version
 
 Unattended login reads answers from stdin, one line at a time, in the order

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/develonrails/carbonate/internal/caldav"
+	"github.com/develonrails/carbonate/internal/carddav"
 	"github.com/develonrails/carbonate/internal/proton"
 )
 
@@ -21,10 +22,19 @@ const cacheTTL = 30 * time.Second
 
 // serveDAV runs the CalDAV server until the context is cancelled.
 func serveDAV(ctx context.Context, conn *proton.Conn, addr, username, password string, out io.Writer) error {
-	backend := caldav.New(conn, cacheTTL)
+	calendars := caldav.New(conn, cacheTTL)
+	addressBook := carddav.New(conn, cacheTTL)
 
 	mux := http.NewServeMux()
-	mux.Handle("/", authenticated(username, password, backend.Handler()))
+	mux.Handle("/caldav/", calendars.Handler())
+	mux.Handle("/carddav/", addressBook.Handler())
+
+	// Clients given only a hostname find their way from here.
+	mux.Handle("/.well-known/caldav", calendars.Handler())
+	mux.Handle("/.well-known/carddav", addressBook.Handler())
+	mux.HandleFunc("/", index)
+
+	guarded := authenticated(username, password, mux)
 
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -32,13 +42,20 @@ func serveDAV(ctx context.Context, conn *proton.Conn, addr, username, password s
 	}
 
 	server := &http.Server{
-		Handler:           mux,
+		Handler:           guarded,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	fmt.Fprintf(out, "Serving CalDAV on http://%s\n", listener.Addr())
-	fmt.Fprintf(out, "In GNOME Calendar: Add calendar -> Add from web, URL http://%s/, user %s, password is your bridge password.\n",
-		listener.Addr(), username)
+	fmt.Fprintf(out, `
+Serving on http://%[1]s — sign in as %[2]s with your bridge password.
+
+  Calendar   http://%[1]s/caldav/
+  Contacts   http://%[1]s/carddav/
+
+GNOME Calendar: Calendars -> Add calendar -> Add from web.
+GNOME Contacts goes through Online Accounts, or add the CardDAV address in
+Evolution directly.
+`, listener.Addr(), username)
 
 	done := make(chan error, 1)
 	go func() { done <- server.Serve(listener) }()
@@ -85,4 +102,16 @@ func authenticated(username, password string, next http.Handler) http.Handler {
 // character at a time.
 func equal(a, b string) bool {
 	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
+}
+
+// index points a browser, or a curious client, at the two collections.
+func index(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	fmt.Fprint(w, "carbonate\n\nCalDAV:  /caldav/\nCardDAV: /carddav/\n")
 }

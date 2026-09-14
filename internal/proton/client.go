@@ -215,6 +215,29 @@ func (c *Conn) AddressKeyRing(addr api.Address) (*crypto.KeyRing, error) {
 	return kr, nil
 }
 
+// PrimaryAddressKeyRing unlocks the keys of the account's primary address.
+//
+// Contacts are encrypted to it rather than to a per-collection key, so this is
+// the keyring that reads and writes them.
+func (c *Conn) PrimaryAddressKeyRing(ctx context.Context) (*crypto.KeyRing, error) {
+	addresses, err := c.Client.GetAddresses(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("fetching addresses: %w", err)
+	}
+
+	// Addresses come back ordered; the first one that can receive is the one
+	// Proton treats as primary.
+	for _, addr := range addresses {
+		if addr.Status != api.AddressStatusEnabled {
+			continue
+		}
+
+		return c.AddressKeyRing(addr)
+	}
+
+	return nil, fmt.Errorf("account has no enabled address")
+}
+
 // CalendarKeys is everything needed to read or write a calendar's events.
 type CalendarKeys struct {
 	// MemberID identifies our membership. Writes are attributed to it.
