@@ -71,7 +71,8 @@ Usage:
   carbonate auth <username>   log in to Proton and store an encrypted session
   carbonate serve             serve CalDAV and CardDAV on localhost
   carbonate calendars         list calendars, and optionally their events
-  carbonate event add         create an event from iCalendar on stdin
+  carbonate event put         create or replace an event from iCalendar on stdin
+  carbonate event delete      delete an event by its iCalendar UID
   carbonate version           print the version
 
 Unattended login reads answers from stdin, one line at a time, in the order

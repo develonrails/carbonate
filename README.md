@@ -4,12 +4,13 @@ A third-party CalDAV and CardDAV bridge for Proton Calendar and Proton Contacts,
 so standards-compliant clients — Thunderbird, Evolution, Calendar.app, DAVx5 —
 can talk to Proton.
 
-> **Status: early, but calendar reads and writes work.** Verified against live
-> Proton: `carbonate auth` logs in and stores an encrypted session,
+> **Status: the calendar works end to end.** Verified against live Proton:
+> `carbonate auth` logs in and stores an encrypted session,
 > `carbonate calendars` decrypts your events into valid iCalendar, and
-> `carbonate event add` writes a new event that appears in the Proton web app.
-> The CalDAV and CardDAV endpoints that would expose this to a client are not
-> built yet. See [Roadmap](#roadmap).
+> `carbonate event put` and `event delete` create, update and remove events
+> that appear correctly in the Proton web app. The CalDAV and CardDAV
+> endpoints that would expose this to a client are not built yet, and contacts
+> are untouched. See [Roadmap](#roadmap).
 
 ## Why
 
@@ -69,7 +70,8 @@ make build      # or: go build ./cmd/carbonate
 ```sh
 carbonate auth <username>   # log in to Proton, store an encrypted session
 carbonate calendars         # list calendars; --events to show them, --ics for raw iCalendar
-carbonate event add         # create an event from iCalendar on stdin
+carbonate event put         # create or replace an event from iCalendar on stdin
+carbonate event delete      # delete an event by its iCalendar UID
 carbonate serve             # serve CalDAV and CardDAV on 127.0.0.1:8080
 ```
 
@@ -78,12 +80,19 @@ $ carbonate calendars --events
 Test kalender! — 1 event(s)
   2026-09-15 (all day)  Test!
 
-$ carbonate event add < event.ics
+$ carbonate event put < event.ics
 Created event kH1f5bFeN3p7LB0D22GANXAbVo9uyQQf...
+
+$ carbonate event put < edited.ics      # same UID
+Updated event kH1f5bFeN3p7LB0D22GANXAbVo9uyQQf...
+
+$ carbonate event delete --uid meeting@example.com
+Deleted event meeting@example.com
 ```
 
-`event add` takes iCalendar in the shape a CalDAV client would PUT, so the
-write path is exercised exactly as the DAV endpoint will use it.
+`event put` is CalDAV PUT semantics: the client owns the UID and does not need
+to know whether Proton has seen it before. The write path is therefore
+exercised exactly as the DAV endpoint will use it.
 
 `auth` prints a randomly generated **bridge password** once. It encrypts the
 session file, and your DAV clients will use it as their password.
@@ -118,7 +127,8 @@ revocation are all exercised without a real account or network access.
 - [ ] Human-verification (CAPTCHA) challenge
 - [x] Calendar: fetch, decrypt and reassemble events into iCalendar
 - [x] Calendar: split, encrypt, sign and create events
-- [ ] Calendar: update and delete existing events
+- [x] Calendar: update and delete events, with SEQUENCE handled correctly
+- [ ] Calendar: recurrence exceptions and attendees
 - [ ] Contacts: decrypt and reassemble vCards
 - [ ] Serve it all over CalDAV and CardDAV
 - [ ] Event-loop poller and delta sync, mapped to DAV ctag / sync-token

@@ -8,7 +8,7 @@ var (
 	authFlagsWithValues      = map[string]bool{"session": true}
 	serveFlagsWithValues     = map[string]bool{"session": true, "addr": true}
 	calendarsFlagsWithValues = map[string]bool{"session": true}
-	eventFlagsWithValues     = map[string]bool{"session": true, "calendar": true}
+	eventFlagsWithValues     = map[string]bool{"session": true, "calendar": true, "uid": true}
 )
 
 // reorderArgs moves positional arguments behind flags.

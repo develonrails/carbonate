@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	api "github.com/ProtonMail/go-proton-api"
 	"github.com/ProtonMail/gopenpgp/v2/crypto"
 	"github.com/emersion/go-ical"
 
@@ -58,34 +59,113 @@ type createEntry struct {
 	Event     *eventData
 }
 
+type updateEntry struct {
+	ID    string
+	Event *eventData
+}
+
+type deleteEntry struct {
+	ID             string
+	DeletionReason int
+}
+
 type syncReq struct {
 	MemberID string
 	Events   []any
 }
 
-// Create writes a new event to a calendar and returns its Proton event ID.
+// Put creates an event, or replaces the existing one with the same UID.
 //
-// ics is an iCalendar object as a CalDAV client would PUT it.
-func Create(ctx context.Context, conn *proton.Conn, calendarID, ics string) (string, error) {
+// This is CalDAV PUT semantics: the client owns the UID and does not know or
+// care whether Proton has seen it before. It reports whether the event was
+// created.
+func Put(ctx context.Context, conn *proton.Conn, calendarID, ics string) (eventID string, created bool, err error) {
 	event, err := parseEvent(ics)
 	if err != nil {
-		return "", err
+		return "", false, err
+	}
+
+	uid := ""
+	if p := event.Props.Get("UID"); p != nil {
+		uid = strings.TrimSpace(p.Value)
+	}
+
+	if uid == "" {
+		return "", false, fmt.Errorf("event has no UID")
 	}
 
 	keys, err := conn.CalendarKeys(ctx, calendarID)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 
-	data, err := buildEvent(event, keys)
+	existing, err := findByUID(ctx, conn, calendarID, uid)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 
-	req := syncReq{
-		MemberID: keys.MemberID,
-		Events:   []any{createEntry{Event: data}},
+	data, err := buildEvent(event, keys, existing)
+	if err != nil {
+		return "", false, err
 	}
+
+	var entry any
+	if existing == nil {
+		entry = createEntry{Event: data}
+	} else {
+		entry = updateEntry{ID: existing.ID, Event: data}
+	}
+
+	id, err := sync(ctx, conn, calendarID, keys.MemberID, entry, true)
+	if err != nil {
+		return "", false, err
+	}
+
+	return id, existing == nil, nil
+}
+
+// Delete removes the event with the given UID. It reports whether an event
+// was found to delete.
+func Delete(ctx context.Context, conn *proton.Conn, calendarID, uid string) (bool, error) {
+	keys, err := conn.CalendarKeys(ctx, calendarID)
+	if err != nil {
+		return false, err
+	}
+
+	existing, err := findByUID(ctx, conn, calendarID, uid)
+	if err != nil {
+		return false, err
+	}
+
+	if existing == nil {
+		return false, nil
+	}
+
+	if _, err := sync(ctx, conn, calendarID, keys.MemberID, deleteEntry{ID: existing.ID}, false); err != nil {
+		return false, err
+	}
+
+	return true, nil
+}
+
+const (
+	// codeOK is Proton's success code, reported in the body alongside a 200.
+	codeOK = 1000
+
+	// codeMultiple is what a batch endpoint answers at the top level: the
+	// request was processed and the real verdicts are per entry. A delete
+	// reports nothing per entry, so it answers 1001 with an empty list —
+	// success, despite looking like a failure.
+	codeMultiple = 1001
+)
+
+// sync posts a single entry to the calendar sync endpoint.
+//
+// wantEvent distinguishes the two response shapes: a create or update answers
+// with a per-entry response carrying the stored event, while a delete answers
+// with a top-level code and no entries at all.
+func sync(ctx context.Context, conn *proton.Conn, calendarID, memberID string, entry any, wantEvent bool) (string, error) {
+	req := syncReq{MemberID: memberID, Events: []any{entry}}
 
 	var res struct {
 		Code      int
@@ -103,22 +183,55 @@ func Create(ctx context.Context, conn *proton.Conn, calendarID, ics string) (str
 		return "", err
 	}
 
+	// The endpoint answers 200 even when an entry was rejected, so the entry's
+	// own code is the real verdict.
+	for _, r := range res.Responses {
+		if r.Response.Code == codeOK {
+			continue
+		}
+
+		if r.Response.Error != "" {
+			return "", fmt.Errorf("Proton rejected the event: %s (code %d)", r.Response.Error, r.Response.Code)
+		}
+
+		return "", fmt.Errorf("Proton rejected the event (code %d)", r.Response.Code)
+	}
+
+	if !wantEvent {
+		if res.Code != codeOK && res.Code != codeMultiple {
+			return "", fmt.Errorf("Proton rejected the request (code %d)", res.Code)
+		}
+
+		return "", nil
+	}
+
 	if len(res.Responses) != 1 {
 		return "", fmt.Errorf("expected one sync response, got %d", len(res.Responses))
 	}
 
-	// The sync endpoint answers 200 even when an entry was rejected; the real
-	// verdict is per-entry.
-	inner := res.Responses[0].Response
-	if inner.Event == nil {
-		if inner.Error != "" {
-			return "", fmt.Errorf("Proton rejected the event: %s (code %d)", inner.Error, inner.Code)
-		}
-
-		return "", fmt.Errorf("Proton rejected the event (code %d)", inner.Code)
+	event := res.Responses[0].Response.Event
+	if event == nil {
+		return "", fmt.Errorf("sync succeeded but returned no event")
 	}
 
-	return inner.Event.ID, nil
+	return event.ID, nil
+}
+
+// findByUID locates an event by its iCalendar UID, returning nil when the
+// calendar has no such event.
+func findByUID(ctx context.Context, conn *proton.Conn, calendarID, uid string) (*api.CalendarEvent, error) {
+	events, err := fetchAll(ctx, conn, calendarID)
+	if err != nil {
+		return nil, err
+	}
+
+	for i := range events {
+		if events[i].UID == uid {
+			return &events[i], nil
+		}
+	}
+
+	return nil, nil
 }
 
 // parseEvent extracts the single VEVENT from an iCalendar object.
@@ -139,8 +252,10 @@ func parseEvent(ics string) (*ical.Event, error) {
 	}
 }
 
-func buildEvent(event *ical.Event, keys *proton.CalendarKeys) (*eventData, error) {
-	normaliseSequence(event)
+func buildEvent(event *ical.Event, keys *proton.CalendarKeys, existing *api.CalendarEvent) (*eventData, error) {
+	if err := normaliseSequence(event, existing); err != nil {
+		return nil, err
+	}
 
 	data := &eventData{Permissions: 1, IsOrganizer: 1}
 
@@ -149,7 +264,14 @@ func buildEvent(event *ical.Event, keys *proton.CalendarKeys) (*eventData, error
 	known := append(append(append(append([]string{}, sharedSigned...), sharedEncrypted...), calendarSigned...), calendarEncrypted...)
 	extra := unknownProps(event, known)
 
-	shared, err := buildCards(event, sharedSigned, append(sharedEncrypted, extra...), keys)
+	// IsOrganizer stays 1: carbonate only writes events on calendars it owns.
+	// go-proton-api does not decode the field from an existing event anyway.
+	var sharedPacket, calendarPacket string
+	if existing != nil {
+		sharedPacket, calendarPacket = existing.SharedKeyPacket, existing.CalendarKeyPacket
+	}
+
+	shared, err := buildCards(event, sharedSigned, append(sharedEncrypted, extra...), keys, sharedPacket)
 	if err != nil {
 		return nil, err
 	}
@@ -157,7 +279,7 @@ func buildEvent(event *ical.Event, keys *proton.CalendarKeys) (*eventData, error
 	data.SharedEventContent = shared.cards
 	data.SharedKeyPacket = shared.keyPacket
 
-	calendar, err := buildCards(event, calendarSigned, calendarEncrypted, keys)
+	calendar, err := buildCards(event, calendarSigned, calendarEncrypted, keys, calendarPacket)
 	if err != nil {
 		return nil, err
 	}
@@ -173,7 +295,12 @@ type cardSet struct {
 	keyPacket string
 }
 
-func buildCards(event *ical.Event, signedProps, encryptedProps []string, keys *proton.CalendarKeys) (cardSet, error) {
+// buildCards renders one part of the event.
+//
+// existingKeyPacket, when present, is reused rather than replaced: re-keying
+// an event on every edit would needlessly churn the copy every attendee holds.
+// A fresh key packet is only sent when there is none to reuse.
+func buildCards(event *ical.Event, signedProps, encryptedProps []string, keys *proton.CalendarKeys, existingKeyPacket string) (cardSet, error) {
 	var out cardSet
 
 	if body := pick(event, signedProps); body != "" {
@@ -197,14 +324,9 @@ func buildCards(event *ical.Event, signedProps, encryptedProps []string, keys *p
 		return cardSet{}, err
 	}
 
-	sessionKey, err := crypto.GenerateSessionKey()
+	sessionKey, keyPacket, err := sessionKeyFor(keys, existingKeyPacket)
 	if err != nil {
-		return cardSet{}, fmt.Errorf("generating session key: %w", err)
-	}
-
-	keyPacket, err := keys.CalKR.EncryptSessionKey(sessionKey)
-	if err != nil {
-		return cardSet{}, fmt.Errorf("encrypting session key: %w", err)
+		return cardSet{}, err
 	}
 
 	encrypted, err := sessionKey.Encrypt(crypto.NewPlainMessageFromString(body))
@@ -212,7 +334,7 @@ func buildCards(event *ical.Event, signedProps, encryptedProps []string, keys *p
 		return cardSet{}, fmt.Errorf("encrypting card: %w", err)
 	}
 
-	out.keyPacket = base64.StdEncoding.EncodeToString(keyPacket)
+	out.keyPacket = keyPacket
 	out.cards = append(out.cards, card{
 		Type:      cardEncryptedAndSigned,
 		Data:      base64.StdEncoding.EncodeToString(encrypted),
@@ -220,6 +342,37 @@ func buildCards(event *ical.Event, signedProps, encryptedProps []string, keys *p
 	})
 
 	return out, nil
+}
+
+// sessionKeyFor reuses an existing key packet, or mints a new one. The
+// returned key packet is empty when an existing one was reused, since Proton
+// only wants it sent when it changes.
+func sessionKeyFor(keys *proton.CalendarKeys, existingKeyPacket string) (*crypto.SessionKey, string, error) {
+	if existingKeyPacket != "" {
+		raw, err := base64.StdEncoding.DecodeString(existingKeyPacket)
+		if err != nil {
+			return nil, "", fmt.Errorf("decoding existing key packet: %w", err)
+		}
+
+		sessionKey, err := keys.CalKR.DecryptSessionKey(raw)
+		if err != nil {
+			return nil, "", fmt.Errorf("decrypting existing session key: %w", err)
+		}
+
+		return sessionKey, "", nil
+	}
+
+	sessionKey, err := crypto.GenerateSessionKey()
+	if err != nil {
+		return nil, "", fmt.Errorf("generating session key: %w", err)
+	}
+
+	keyPacket, err := keys.CalKR.EncryptSessionKey(sessionKey)
+	if err != nil {
+		return nil, "", fmt.Errorf("encrypting session key: %w", err)
+	}
+
+	return sessionKey, base64.StdEncoding.EncodeToString(keyPacket), nil
 }
 
 func sign(addrKR *crypto.KeyRing, body string) (string, error) {
@@ -290,19 +443,63 @@ func unknownProps(event *ical.Event, known []string) []string {
 	return out
 }
 
-// normaliseSequence makes sure SEQUENCE is present and plainly encoded.
+// normaliseSequence makes sure SEQUENCE is present, plainly encoded, and — on
+// an update — strictly greater than the stored event's.
 //
-// Proton rejects "SEQUENCE;VALUE=TEXT:0" — which is what go-ical's SetText
-// produces — with a 500, and silently drops an update whose SEQUENCE does not
-// increase.
-func normaliseSequence(event *ical.Event) {
-	value := "0"
+// Proton *silently* drops an edit whose SEQUENCE does not increase: no error,
+// no changed event. Clients do not reliably bump it, so carbonate must. And
+// the value has to be bare, because "SEQUENCE;VALUE=TEXT:1", which go-ical's
+// SetText produces, earns a 500.
+func normaliseSequence(event *ical.Event, existing *api.CalendarEvent) error {
+	next := 0
 
 	if p := event.Props.Get("SEQUENCE"); p != nil {
 		if n, err := strconv.Atoi(strings.TrimSpace(p.Value)); err == nil {
-			value = strconv.Itoa(n)
+			next = n
 		}
 	}
 
-	event.Props.Set(&ical.Prop{Name: "SEQUENCE", Value: value})
+	if existing != nil {
+		current, err := storedSequence(existing)
+		if err != nil {
+			return err
+		}
+
+		if current+1 > next {
+			next = current + 1
+		}
+	}
+
+	event.Props.Set(&ical.Prop{Name: "SEQUENCE", Value: strconv.Itoa(next)})
+
+	return nil
+}
+
+// storedSequence reads SEQUENCE from the stored event.
+//
+// Proton keeps it in the signed shared card, which is cleartext, so this needs
+// no calendar key.
+func storedSequence(existing *api.CalendarEvent) (int, error) {
+	for _, part := range existing.SharedEvents {
+		if part.Type&api.CalendarEventTypeEncrypted != 0 || part.Data == "" {
+			continue
+		}
+
+		for _, line := range properties(part.Data) {
+			if name(line) != "SEQUENCE" {
+				continue
+			}
+
+			value := strings.TrimPrefix(line, "SEQUENCE:")
+
+			n, err := strconv.Atoi(strings.TrimSpace(value))
+			if err != nil {
+				return 0, fmt.Errorf("stored SEQUENCE %q is not a number: %w", value, err)
+			}
+
+			return n, nil
+		}
+	}
+
+	return 0, nil
 }

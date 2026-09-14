@@ -170,9 +170,14 @@ follows is read from [protoxide](https://github.com/mathewcsims/protoxide)
 (MIT). carbonate reimplements the split against gopenpgp rather than copying
 code, but the table itself is protoxide's work.
 
-**Verified:** an event created by `carbonate event add` — with DTSTART, DTEND,
-SUMMARY, LOCATION, DESCRIPTION and STATUS — round-trips through Proton and
-reads back with every property intact and its signatures verifying.
+**Verified:** create, update and delete all round-trip against a live account
+and show up correctly in the Proton web app. On update, a client sending
+`SEQUENCE:0` had it rewritten to `SEQUENCE:1`; without that the edit would have
+been discarded in silence.
+
+Key packets are **reused on update**, not regenerated: re-keying an event on
+every edit would churn the copy each attendee holds. A new key packet is only
+sent when there is none to reuse.
 
 One detail the read side makes obvious: **the signature covers the plaintext,
 not the ciphertext.** Sign first, then encrypt, and send the ciphertext beside
@@ -184,6 +189,13 @@ a signature over what went into it.
 handles create, update and delete through different entry shapes. There is no
 separate POST or DELETE. Responses are per-entry, so a batch can partially
 fail and the per-entry code is where the real reason lives.
+
+**The two response shapes differ.** A create or update answers with one entry
+in `Responses` carrying the stored event. A delete answers
+`{"Code":1001,"Responses":[]}` — nothing per entry at all. Code **1001** is not
+an error: it is what a batch endpoint reports at the top level, meaning the
+real verdicts follow per entry. Treating it as a failure makes a successful
+delete look broken, which is exactly what happened here.
 
 Create versus update is decided by first fetching the event: API code **2061**
 ("not a valid ID") means it does not exist yet.
@@ -224,7 +236,9 @@ afternoon to it:
 
 1. **`SEQUENCE` must strictly increase** on an update, or Proton *silently*
    drops the edit. Clients do not reliably bump it, so the bridge has to force
-   `old + 1`.
+   `old + 1`. The stored value is readable without the calendar key, since
+   Proton keeps `SEQUENCE` in the signed — and therefore cleartext — shared
+   card.
 2. **`SEQUENCE` must be emitted bare** — `SEQUENCE:0`. Encoding it as
    `SEQUENCE;VALUE=TEXT:0`, which go-ical's `SetText` does, earns a 500.
 3. **Sign with the member's own address key.** Defaulting to the first key in

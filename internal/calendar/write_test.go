@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	api "github.com/ProtonMail/go-proton-api"
 	"github.com/emersion/go-ical"
 )
 
@@ -142,7 +143,10 @@ func TestPickAlwaysCarriesIdentity(t *testing.T) {
 // SetText would produce.
 func TestNormaliseSequenceEmitsBareValue(t *testing.T) {
 	event := parse(t, fullEvent)
-	normaliseSequence(event)
+
+	if err := normaliseSequence(event, nil); err != nil {
+		t.Fatalf("normaliseSequence: %v", err)
+	}
 
 	body := pick(event, sharedSigned)
 
@@ -157,10 +161,66 @@ func TestNormaliseSequenceEmitsBareValue(t *testing.T) {
 
 func TestNormaliseSequencePreservesExistingValue(t *testing.T) {
 	event := parse(t, strings.Replace(fullEvent, "UID:test@carbonate.local", "UID:test@carbonate.local\nSEQUENCE:7", 1))
-	normaliseSequence(event)
+
+	if err := normaliseSequence(event, nil); err != nil {
+		t.Fatalf("normaliseSequence: %v", err)
+	}
 
 	if p := event.Props.Get("SEQUENCE"); p == nil || p.Value != "7" {
 		t.Errorf("SEQUENCE = %v, want 7", p)
+	}
+}
+
+// Proton silently discards an update whose SEQUENCE does not increase, so a
+// client that never bumps it would see its edits vanish without an error.
+func TestNormaliseSequenceOutrunsStoredValue(t *testing.T) {
+	stored := &api.CalendarEvent{
+		SharedEvents: []api.CalendarEventPart{{
+			Type: api.CalendarEventTypeSigned,
+			Data: "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:test@carbonate.local\r\nSEQUENCE:4\r\nEND:VEVENT\r\nEND:VCALENDAR",
+		}},
+	}
+
+	// The client sends SEQUENCE:0, as many do on every edit.
+	event := parse(t, fullEvent)
+
+	if err := normaliseSequence(event, stored); err != nil {
+		t.Fatalf("normaliseSequence: %v", err)
+	}
+
+	if p := event.Props.Get("SEQUENCE"); p == nil || p.Value != "5" {
+		t.Errorf("SEQUENCE = %v, want 5 (stored 4 + 1)", p)
+	}
+}
+
+// A client that does bump it properly must not be dragged backwards.
+func TestNormaliseSequenceKeepsHigherClientValue(t *testing.T) {
+	stored := &api.CalendarEvent{
+		SharedEvents: []api.CalendarEventPart{{
+			Type: api.CalendarEventTypeSigned,
+			Data: "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nSEQUENCE:2\r\nEND:VEVENT\r\nEND:VCALENDAR",
+		}},
+	}
+
+	event := parse(t, strings.Replace(fullEvent, "UID:test@carbonate.local", "UID:test@carbonate.local\nSEQUENCE:9", 1))
+
+	if err := normaliseSequence(event, stored); err != nil {
+		t.Fatalf("normaliseSequence: %v", err)
+	}
+
+	if p := event.Props.Get("SEQUENCE"); p == nil || p.Value != "9" {
+		t.Errorf("SEQUENCE = %v, want 9", p)
+	}
+}
+
+func TestStoredSequenceDefaultsToZero(t *testing.T) {
+	n, err := storedSequence(&api.CalendarEvent{})
+	if err != nil {
+		t.Fatalf("storedSequence: %v", err)
+	}
+
+	if n != 0 {
+		t.Errorf("storedSequence with no parts = %d, want 0", n)
 	}
 }
 

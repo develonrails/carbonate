@@ -146,6 +146,10 @@ func (c *Conn) do(ctx context.Context, method, path string, body, out any) error
 		return fmt.Errorf("reading %s: %w", path, err)
 	}
 
+	if os.Getenv("CARBONATE_DEBUG") != "" {
+		fmt.Fprintf(os.Stderr, "carbonate: %s %s -> %s\n%s\n", method, path, res.Status, raw)
+	}
+
 	if res.StatusCode != http.StatusOK {
 		// Proton puts the useful reason in the body, not the status line.
 		return fmt.Errorf("requesting %s: %s: %s", path, res.Status, strings.TrimSpace(string(raw)))
