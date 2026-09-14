@@ -49,7 +49,10 @@ Proton's data model happens to be the DAV formats already:
 
 Reading means reassembling those parts, which carbonate now does. Writing means
 splitting them back apart correctly — which is where the real work is, and
-go-proton-api offers no calendar write endpoints at all.
+go-proton-api offers no calendar write endpoints at all. protoxide solved this
+by writing its own API client; the endpoint, the property-split table and the
+ways Proton rejects a bad write are documented in
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detail.
 

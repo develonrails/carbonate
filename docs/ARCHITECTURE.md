@@ -160,6 +160,67 @@ DAV `ctag` / `sync-token` so clients fetch just the delta.
   findings above were diagnosed, and it prints access tokens, so keep it off
   by default.
 
+## The write path, as protoxide does it
+
+carbonate cannot create events yet. protoxide can, and it does not use
+go-proton-api at all — it carries its own hand-written `protonmail` client
+inherited from hydroxide, so the missing endpoints were simply written. What
+follows is read from [protoxide](https://github.com/mathewcsims/protoxide)
+(MIT); porting it means carrying its copyright notice.
+
+### One endpoint for everything
+
+`PUT /calendar/v1/{calendarID}/events/sync` takes a batch of entries and
+handles create, update and delete through different entry shapes. There is no
+separate POST or DELETE. Responses are per-entry, so a batch can partially
+fail and the per-entry code is where the real reason lives.
+
+Create versus update is decided by first fetching the event: API code **2061**
+("not a valid ID") means it does not exist yet.
+
+`GET /calendar/v1/{id}/bootstrap` returns keys, members and passphrase in a
+single call — cheaper than the three separate requests carbonate currently
+makes.
+
+### Which property goes in which part
+
+This is the table I expected to have to derive by experiment:
+
+| Part | Card | Properties |
+|---|---|---|
+| Shared | signed | `uid` `dtstamp` `dtstart` `dtend` `recurrence-id` `rrule` `exdate` `organizer` `sequence` |
+| Shared | encrypted + signed | `uid` `dtstamp` `created` `description` `summary` `location` |
+| Calendar | signed | `uid` `dtstamp` `exdate` `status` `transp` |
+| Calendar | encrypted + signed | `uid` `dtstamp` `comment` |
+
+`uid` and `dtstamp` repeat in every card — which is exactly what the live event
+showed on the read side, and why reassembly has to collapse them.
+
+Two rules that are not obvious from the table:
+
+- **Unrecognised properties go into the shared encrypted card.** Encrypting
+  what you do not understand is the safe default.
+- **A card holding only `uid` and `dtstamp` is dropped entirely** rather than
+  sent as an empty encrypted blob. This is why our live test event came back
+  with no `AttendeesEvents` and a null `CalendarKeyPacket`.
+
+VALARM does not go into an ICS part at all; alarms travel as a separate
+`Notifications` JSON field on the event.
+
+### Three ways Proton rejects a write
+
+Each of these is a comment in protoxide's source, meaning someone lost an
+afternoon to it:
+
+1. **`SEQUENCE` must strictly increase** on an update, or Proton *silently*
+   drops the edit. Clients do not reliably bump it, so the bridge has to force
+   `old + 1`.
+2. **`SEQUENCE` must be emitted bare** — `SEQUENCE:0`. Encoding it as
+   `SEQUENCE;VALUE=TEXT:0`, which go-ical's `SetText` does, earns a 500.
+3. **Sign with the member's own address key.** Defaulting to the first key in
+   the keyring fails on accounts with several addresses, with code **2001**,
+   "Provide data signed using the address key".
+
 ## Known hard parts
 
 1. **Login.** SRP plus 2FA plus a human-verification CAPTCHA. protoxide opens a
