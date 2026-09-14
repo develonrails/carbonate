@@ -4,11 +4,12 @@ A third-party CalDAV and CardDAV bridge for Proton Calendar and Proton Contacts,
 so standards-compliant clients — Thunderbird, Evolution, Calendar.app, DAVx5 —
 can talk to Proton.
 
-> **Status: early, but it reads your calendar.** Verified against live Proton:
-> `carbonate auth` logs in and stores an encrypted session, and
-> `carbonate calendars` decrypts your events and reassembles them into valid
-> iCalendar. The CalDAV and CardDAV endpoints that would expose this to a
-> client are not built yet. See [Roadmap](#roadmap).
+> **Status: early, but calendar reads and writes work.** Verified against live
+> Proton: `carbonate auth` logs in and stores an encrypted session,
+> `carbonate calendars` decrypts your events into valid iCalendar, and
+> `carbonate event add` writes a new event that appears in the Proton web app.
+> The CalDAV and CardDAV endpoints that would expose this to a client are not
+> built yet. See [Roadmap](#roadmap).
 
 ## Why
 
@@ -47,12 +48,11 @@ Proton's data model happens to be the DAV formats already:
   `AttendeesEvents` and `PersonalEvents`, each with signed and encrypted
   sections under a per-calendar key.
 
-Reading means reassembling those parts, which carbonate now does. Writing means
-splitting them back apart correctly — which is where the real work is, and
-go-proton-api offers no calendar write endpoints at all. protoxide solved this
-by writing its own API client; the endpoint, the property-split table and the
-ways Proton rejects a bad write are documented in
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Reading means reassembling those parts; writing means splitting them back apart
+correctly. carbonate now does both. go-proton-api offers no calendar write
+endpoints, so carbonate calls Proton's sync endpoint itself — the property-split
+table comes from protoxide, and the ways Proton rejects a bad write are
+documented in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detail.
 
@@ -69,6 +69,7 @@ make build      # or: go build ./cmd/carbonate
 ```sh
 carbonate auth <username>   # log in to Proton, store an encrypted session
 carbonate calendars         # list calendars; --events to show them, --ics for raw iCalendar
+carbonate event add         # create an event from iCalendar on stdin
 carbonate serve             # serve CalDAV and CardDAV on 127.0.0.1:8080
 ```
 
@@ -76,7 +77,13 @@ carbonate serve             # serve CalDAV and CardDAV on 127.0.0.1:8080
 $ carbonate calendars --events
 Test kalender! — 1 event(s)
   2026-09-15 (all day)  Test!
+
+$ carbonate event add < event.ics
+Created event kH1f5bFeN3p7LB0D22GANXAbVo9uyQQf...
 ```
+
+`event add` takes iCalendar in the shape a CalDAV client would PUT, so the
+write path is exercised exactly as the DAV endpoint will use it.
 
 `auth` prints a randomly generated **bridge password** once. It encrypts the
 session file, and your DAV clients will use it as their password.
@@ -110,6 +117,8 @@ revocation are all exercised without a real account or network access.
 - [x] Unattended login via `--password-stdin`
 - [ ] Human-verification (CAPTCHA) challenge
 - [x] Calendar: fetch, decrypt and reassemble events into iCalendar
+- [x] Calendar: split, encrypt, sign and create events
+- [ ] Calendar: update and delete existing events
 - [ ] Contacts: decrypt and reassemble vCards
 - [ ] Serve it all over CalDAV and CardDAV
 - [ ] Event-loop poller and delta sync, mapped to DAV ctag / sync-token

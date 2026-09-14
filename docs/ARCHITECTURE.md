@@ -160,13 +160,23 @@ DAV `ctag` / `sync-token` so clients fetch just the delta.
   findings above were diagnosed, and it prints access tokens, so keep it off
   by default.
 
-## The write path, as protoxide does it
+## The write path
 
-carbonate cannot create events yet. protoxide can, and it does not use
-go-proton-api at all — it carries its own hand-written `protonmail` client
+carbonate creates events by calling Proton's sync endpoint directly, since
+go-proton-api has none. The property-split table below is read from
+protoxide, which does not use go-proton-api at all — it carries its own hand-written `protonmail` client
 inherited from hydroxide, so the missing endpoints were simply written. What
 follows is read from [protoxide](https://github.com/mathewcsims/protoxide)
-(MIT); porting it means carrying its copyright notice.
+(MIT). carbonate reimplements the split against gopenpgp rather than copying
+code, but the table itself is protoxide's work.
+
+**Verified:** an event created by `carbonate event add` — with DTSTART, DTEND,
+SUMMARY, LOCATION, DESCRIPTION and STATUS — round-trips through Proton and
+reads back with every property intact and its signatures verifying.
+
+One detail the read side makes obvious: **the signature covers the plaintext,
+not the ciphertext.** Sign first, then encrypt, and send the ciphertext beside
+a signature over what went into it.
 
 ### One endpoint for everything
 

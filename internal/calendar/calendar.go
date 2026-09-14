@@ -124,7 +124,7 @@ func (e Event) When() string {
 
 // Events fetches and decrypts every event in a calendar.
 func Events(ctx context.Context, conn *proton.Conn, calendarID string) ([]Event, error) {
-	calKR, addrKR, err := conn.CalendarKeyRing(ctx, calendarID)
+	keys, err := conn.CalendarKeys(ctx, calendarID)
 	if err != nil {
 		return nil, err
 	}
@@ -137,7 +137,7 @@ func Events(ctx context.Context, conn *proton.Conn, calendarID string) ([]Event,
 	events := make([]Event, 0, len(raw))
 
 	for _, r := range raw {
-		event, err := decode(r, calKR, addrKR)
+		event, err := decode(r, keys.CalKR, keys.AddrKR)
 		if err != nil {
 			return nil, fmt.Errorf("decoding event %s: %w", r.ID, err)
 		}

@@ -51,6 +51,8 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 		return cmdServe(ctx, args[1:], out)
 	case "calendars":
 		return cmdCalendars(ctx, args[1:], out)
+	case "event":
+		return cmdEvent(ctx, args[1:], out)
 	case "version":
 		fmt.Fprintln(out, version)
 		return nil
@@ -69,6 +71,7 @@ Usage:
   carbonate auth <username>   log in to Proton and store an encrypted session
   carbonate serve             serve CalDAV and CardDAV on localhost
   carbonate calendars         list calendars, and optionally their events
+  carbonate event add         create an event from iCalendar on stdin
   carbonate version           print the version
 
 Unattended login reads answers from stdin, one line at a time, in the order

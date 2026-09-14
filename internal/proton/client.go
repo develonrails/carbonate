@@ -6,10 +6,12 @@
 package proton
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -93,11 +95,34 @@ func (c *Conn) setCredentials(uid, accessToken string) {
 // for example, moved into the member object and is no longer decoded at all —
 // so carbonate occasionally needs the response as Proton actually sends it.
 func (c *Conn) Get(ctx context.Context, path string, out any) error {
+	return c.do(ctx, http.MethodGet, path, nil, out)
+}
+
+// Put sends body as JSON and decodes the response into out.
+//
+// Proton's calendar write path is a single PUT .../events/sync that carries
+// create, update and delete as differently shaped entries.
+func (c *Conn) Put(ctx context.Context, path string, body, out any) error {
+	return c.do(ctx, http.MethodPut, path, body, out)
+}
+
+func (c *Conn) do(ctx context.Context, method, path string, body, out any) error {
 	c.mu.RLock()
 	uid, token := c.uid, c.accessToken
 	c.mu.RUnlock()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, hostURL()+path, nil)
+	var payload io.Reader
+
+	if body != nil {
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			return fmt.Errorf("encoding request for %s: %w", path, err)
+		}
+
+		payload = bytes.NewReader(encoded)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, hostURL()+path, payload)
 	if err != nil {
 		return fmt.Errorf("building request for %s: %w", path, err)
 	}
@@ -106,17 +131,31 @@ func (c *Conn) Get(ctx context.Context, path string, out any) error {
 	req.Header.Set("x-pm-uid", uid)
 	req.Header.Set("Authorization", "Bearer "+token)
 
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("requesting %s: %w", path, err)
 	}
 	defer res.Body.Close()
 
-	if res.StatusCode != http.StatusOK {
-		return fmt.Errorf("requesting %s: unexpected status %s", path, res.Status)
+	raw, err := io.ReadAll(res.Body)
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", path, err)
 	}
 
-	if err := json.NewDecoder(res.Body).Decode(out); err != nil {
+	if res.StatusCode != http.StatusOK {
+		// Proton puts the useful reason in the body, not the status line.
+		return fmt.Errorf("requesting %s: %s: %s", path, res.Status, strings.TrimSpace(string(raw)))
+	}
+
+	if out == nil {
+		return nil
+	}
+
+	if err := json.Unmarshal(raw, out); err != nil {
 		return fmt.Errorf("decoding %s: %w", path, err)
 	}
 
@@ -137,21 +176,33 @@ func (c *Conn) AddressKeyRing(addr api.Address) (*crypto.KeyRing, error) {
 	return kr, nil
 }
 
-// CalendarKeyRing unlocks a calendar's keys and returns them together with the
-// address keyring that owns the membership.
+// CalendarKeys is everything needed to read or write a calendar's events.
+type CalendarKeys struct {
+	// MemberID identifies our membership. Writes are attributed to it.
+	MemberID string
+
+	// CalKR decrypts and encrypts event content.
+	CalKR *crypto.KeyRing
+
+	// AddrKR verifies signatures on read, and makes them on write. Proton
+	// rejects an event signed with anything but the member's own address key.
+	AddrKR *crypto.KeyRing
+}
+
+// CalendarKeys unlocks a calendar's keys.
 //
-// A calendar key is wrapped in a passphrase that is encrypted to a member's
-// address key, so the address keyring is needed both to get in and, later, to
-// verify the signatures on event parts.
-func (c *Conn) CalendarKeyRing(ctx context.Context, calendarID string) (calKR, addrKR *crypto.KeyRing, err error) {
+// A calendar key is wrapped in a passphrase encrypted to a member's address
+// key, so the address keyring is needed both to get in and to handle the
+// signatures on event parts.
+func (c *Conn) CalendarKeys(ctx context.Context, calendarID string) (*CalendarKeys, error) {
 	members, err := c.Client.GetCalendarMembers(ctx, calendarID)
 	if err != nil {
-		return nil, nil, fmt.Errorf("fetching calendar members: %w", err)
+		return nil, fmt.Errorf("fetching calendar members: %w", err)
 	}
 
 	addresses, err := c.Client.GetAddresses(ctx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("fetching addresses: %w", err)
+		return nil, fmt.Errorf("fetching addresses: %w", err)
 	}
 
 	// Membership is recorded by email, so pair it back up with our address.
@@ -167,33 +218,35 @@ func (c *Conn) CalendarKeyRing(ctx context.Context, calendarID string) (calKR, a
 	}
 
 	if member.ID == "" {
-		return nil, nil, fmt.Errorf("no membership of calendar %s belongs to this account", calendarID)
+		return nil, fmt.Errorf("no membership of calendar %s belongs to this account", calendarID)
 	}
 
-	if addrKR, err = c.AddressKeyRing(addr); err != nil {
-		return nil, nil, err
+	addrKR, err := c.AddressKeyRing(addr)
+	if err != nil {
+		return nil, err
 	}
 
 	passphrase, err := c.Client.GetCalendarPassphrase(ctx, calendarID)
 	if err != nil {
-		return nil, nil, fmt.Errorf("fetching calendar passphrase: %w", err)
+		return nil, fmt.Errorf("fetching calendar passphrase: %w", err)
 	}
 
 	raw, err := passphrase.Decrypt(member.ID, addrKR)
 	if err != nil {
-		return nil, nil, fmt.Errorf("decrypting calendar passphrase: %w", err)
+		return nil, fmt.Errorf("decrypting calendar passphrase: %w", err)
 	}
 
 	keys, err := c.Client.GetCalendarKeys(ctx, calendarID)
 	if err != nil {
-		return nil, nil, fmt.Errorf("fetching calendar keys: %w", err)
+		return nil, fmt.Errorf("fetching calendar keys: %w", err)
 	}
 
-	if calKR, err = keys.Unlock(raw); err != nil {
-		return nil, nil, fmt.Errorf("unlocking calendar keys: %w", err)
+	calKR, err := keys.Unlock(raw)
+	if err != nil {
+		return nil, fmt.Errorf("unlocking calendar keys: %w", err)
 	}
 
-	return calKR, addrKR, nil
+	return &CalendarKeys{MemberID: member.ID, CalKR: calKR, AddrKR: addrKR}, nil
 }
 
 // Close releases the client and its underlying manager.
