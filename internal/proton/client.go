@@ -107,6 +107,37 @@ func (c *Conn) Put(ctx context.Context, path string, body, out any) error {
 }
 
 func (c *Conn) do(ctx context.Context, method, path string, body, out any) error {
+	status, err := c.attempt(ctx, method, path, body, out)
+	if err != nil {
+		return err
+	}
+
+	if status != http.StatusUnauthorized {
+		return nil
+	}
+
+	// Raw requests carry a snapshot of the access token, and Proton expires
+	// them. go-proton-api refreshes on its own 401s, so provoke one cheaply:
+	// it fires the auth handler, which updates our copy. Then try once more.
+	if _, err := c.Client.GetUser(ctx); err != nil {
+		return fmt.Errorf("refreshing expired token: %w", err)
+	}
+
+	status, err = c.attempt(ctx, method, path, body, out)
+	if err != nil {
+		return err
+	}
+
+	if status == http.StatusUnauthorized {
+		return fmt.Errorf("requesting %s: still unauthorised after refreshing the token", path)
+	}
+
+	return nil
+}
+
+// attempt makes one request. It returns the status code when the request was
+// rejected in a way worth retrying, and otherwise reports the failure.
+func (c *Conn) attempt(ctx context.Context, method, path string, body, out any) (int, error) {
 	c.mu.RLock()
 	uid, token := c.uid, c.accessToken
 	c.mu.RUnlock()
@@ -116,7 +147,7 @@ func (c *Conn) do(ctx context.Context, method, path string, body, out any) error
 	if body != nil {
 		encoded, err := json.Marshal(body)
 		if err != nil {
-			return fmt.Errorf("encoding request for %s: %w", path, err)
+			return 0, fmt.Errorf("encoding request for %s: %w", path, err)
 		}
 
 		payload = bytes.NewReader(encoded)
@@ -124,7 +155,7 @@ func (c *Conn) do(ctx context.Context, method, path string, body, out any) error
 
 	req, err := http.NewRequestWithContext(ctx, method, hostURL()+path, payload)
 	if err != nil {
-		return fmt.Errorf("building request for %s: %w", path, err)
+		return 0, fmt.Errorf("building request for %s: %w", path, err)
 	}
 
 	req.Header.Set("x-pm-appversion", appVersion())
@@ -137,33 +168,37 @@ func (c *Conn) do(ctx context.Context, method, path string, body, out any) error
 
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("requesting %s: %w", path, err)
+		return 0, fmt.Errorf("requesting %s: %w", path, err)
 	}
 	defer res.Body.Close()
 
 	raw, err := io.ReadAll(res.Body)
 	if err != nil {
-		return fmt.Errorf("reading %s: %w", path, err)
+		return 0, fmt.Errorf("reading %s: %w", path, err)
 	}
 
 	if os.Getenv("CARBONATE_DEBUG") != "" {
 		fmt.Fprintf(os.Stderr, "carbonate: %s %s -> %s\n%s\n", method, path, res.Status, raw)
 	}
 
+	if res.StatusCode == http.StatusUnauthorized {
+		return res.StatusCode, nil
+	}
+
 	if res.StatusCode != http.StatusOK {
 		// Proton puts the useful reason in the body, not the status line.
-		return fmt.Errorf("requesting %s: %s: %s", path, res.Status, strings.TrimSpace(string(raw)))
+		return res.StatusCode, fmt.Errorf("requesting %s: %s: %s", path, res.Status, strings.TrimSpace(string(raw)))
 	}
 
 	if out == nil {
-		return nil
+		return res.StatusCode, nil
 	}
 
 	if err := json.Unmarshal(raw, out); err != nil {
-		return fmt.Errorf("decoding %s: %w", path, err)
+		return res.StatusCode, fmt.Errorf("decoding %s: %w", path, err)
 	}
 
-	return nil
+	return res.StatusCode, nil
 }
 
 // AddressKeyRing unlocks the keys of a single address.

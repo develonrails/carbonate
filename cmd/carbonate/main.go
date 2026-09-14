@@ -168,7 +168,17 @@ func cmdServe(ctx context.Context, args []string, out io.Writer) error {
 		return err
 	}
 
-	conn, err := connect(ctx, *path)
+	sessionPath, err := resolvePath(*path)
+	if err != nil {
+		return err
+	}
+
+	bridgePassword, err := bridgePassword()
+	if err != nil {
+		return err
+	}
+
+	conn, err := resume(ctx, sessionPath, bridgePassword)
 	if err != nil {
 		return err
 	}
@@ -179,20 +189,9 @@ func cmdServe(ctx context.Context, args []string, out io.Writer) error {
 		return fmt.Errorf("fetching user: %w", err)
 	}
 
-	calendars, err := conn.Client.GetCalendars(ctx)
-	if err != nil {
-		return fmt.Errorf("fetching calendars: %w", err)
-	}
+	fmt.Fprintf(out, "Connected as %s.\n", user.Email)
 
-	contacts, err := conn.Client.CountContacts(ctx)
-	if err != nil {
-		return fmt.Errorf("counting contacts: %w", err)
-	}
-
-	fmt.Fprintf(out, "Connected as %s: %d calendar(s), %d contact(s), keys unlocked.\n",
-		user.Email, len(calendars), contacts)
-
-	return fmt.Errorf("not implemented: would serve CalDAV and CardDAV on %s", *addr)
+	return serveDAV(ctx, conn, *addr, user.Email, bridgePassword, out)
 }
 
 func resolvePath(override string) (string, error) {
@@ -235,22 +234,36 @@ func connect(ctx context.Context, pathOverride string) (*proton.Conn, error) {
 		return nil, err
 	}
 
-	bridgePassword := os.Getenv("CARBONATE_BRIDGE_PASSWORD")
-	if bridgePassword == "" {
-		buf, err := terminalPrompter{}.Password("Bridge password: ")
-		if err != nil {
-			return nil, err
-		}
-
-		bridgePassword = string(buf)
-	}
-
-	sess, err := session.Load(sessionPath, bridgePassword)
+	password, err := bridgePassword()
 	if err != nil {
 		return nil, err
 	}
 
-	store := &sessionStore{path: sessionPath, password: bridgePassword, sess: sess}
+	return resume(ctx, sessionPath, password)
+}
+
+// bridgePassword reads the bridge password from the environment, falling back
+// to a terminal prompt.
+func bridgePassword() (string, error) {
+	if p := os.Getenv("CARBONATE_BRIDGE_PASSWORD"); p != "" {
+		return p, nil
+	}
+
+	buf, err := terminalPrompter{}.Password("Bridge password: ")
+	if err != nil {
+		return "", err
+	}
+
+	return string(buf), nil
+}
+
+func resume(ctx context.Context, sessionPath, password string) (*proton.Conn, error) {
+	sess, err := session.Load(sessionPath, password)
+	if err != nil {
+		return nil, err
+	}
+
+	store := &sessionStore{path: sessionPath, password: password, sess: sess}
 
 	return proton.Resume(ctx, sess, store.persist)
 }

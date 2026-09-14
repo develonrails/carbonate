@@ -27,6 +27,10 @@ type Event struct {
 	Start time.Time
 	End   time.Time
 
+	// Modified is when Proton last saw the event change. It drives the CalDAV
+	// ETag, so a client can skip events it already has.
+	Modified time.Time
+
 	FullDay   bool
 	Attendees int
 
@@ -235,6 +239,7 @@ func decode(raw api.CalendarEvent, calKR, addrKR *crypto.KeyRing) (Event, error)
 		UID:       raw.UID,
 		Start:     time.Unix(raw.StartTime, 0),
 		End:       time.Unix(raw.EndTime, 0),
+		Modified:  time.Unix(raw.LastEditTime, 0),
 		FullDay:   bool(raw.FullDay),
 		Attendees: len(raw.Attendees),
 	}

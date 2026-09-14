@@ -4,13 +4,9 @@ A third-party CalDAV and CardDAV bridge for Proton Calendar and Proton Contacts,
 so standards-compliant clients — Thunderbird, Evolution, Calendar.app, DAVx5 —
 can talk to Proton.
 
-> **Status: the calendar works end to end.** Verified against live Proton:
-> `carbonate auth` logs in and stores an encrypted session,
-> `carbonate calendars` decrypts your events into valid iCalendar, and
-> `carbonate event put` and `event delete` create, update and remove events
-> that appear correctly in the Proton web app. The CalDAV and CardDAV
-> endpoints that would expose this to a client are not built yet, and contacts
-> are untouched. See [Roadmap](#roadmap).
+> **Status: CalDAV works.** `carbonate serve` exposes your Proton calendar to
+> a standard CalDAV client, with reads and writes verified against live Proton.
+> Contacts and CardDAV are not built yet. See [Roadmap](#roadmap).
 
 ## Why
 
@@ -72,7 +68,7 @@ carbonate auth <username>   # log in to Proton, store an encrypted session
 carbonate calendars         # list calendars; --events to show them, --ics for raw iCalendar
 carbonate event put         # create or replace an event from iCalendar on stdin
 carbonate event delete      # delete an event by its iCalendar UID
-carbonate serve             # serve CalDAV and CardDAV on 127.0.0.1:8080
+carbonate serve             # serve CalDAV on 127.0.0.1:8080
 ```
 
 ```console
@@ -97,9 +93,21 @@ exercised exactly as the DAV endpoint will use it.
 `auth` prints a randomly generated **bridge password** once. It encrypts the
 session file, and your DAV clients will use it as their password.
 
-Point your client at `http://127.0.0.1:8080` with your Proton username and that
-bridge password. HTTP is deliberately unencrypted: the listener binds to
-loopback only.
+### Connecting GNOME Calendar
+
+With `carbonate serve` running:
+
+1. **Calendars → Add calendar → Add from web**
+2. URL `http://127.0.0.1:8080/`
+3. Username: your Proton address. Password: the bridge password.
+
+Evolution, Thunderbird and DAVx5 take the same three values. `/` and
+`/.well-known/caldav` both redirect to the principal, so the bare address is
+enough.
+
+HTTP is deliberately unencrypted: the listener binds to loopback only, and
+basic auth is there to stop other local processes reaching your calendar
+rather than to protect the wire.
 
 Set `CARBONATE_BRIDGE_PASSWORD` to run unattended, and `CARBONATE_DEBUG=1` to
 dump every request and response when the API misbehaves — it prints access
@@ -128,9 +136,11 @@ revocation are all exercised without a real account or network access.
 - [x] Calendar: fetch, decrypt and reassemble events into iCalendar
 - [x] Calendar: split, encrypt, sign and create events
 - [x] Calendar: update and delete events, with SEQUENCE handled correctly
+- [x] Serve calendars over CalDAV, read and write
 - [ ] Calendar: recurrence exceptions and attendees
-- [ ] Contacts: decrypt and reassemble vCards
-- [ ] Serve it all over CalDAV and CardDAV
+- [ ] `getctag` and sync-token, so clients need not re-read everything
+- [ ] Event-loop driven cache instead of a short TTL
+- [ ] Contacts: decrypt, reassemble vCards, serve over CardDAV
 - [ ] Event-loop poller and delta sync, mapped to DAV ctag / sync-token
 - [ ] Write path: create, edit, delete round-tripping to Proton
 - [ ] Recurrence exceptions and attendees

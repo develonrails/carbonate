@@ -52,6 +52,36 @@ PROPFIND/REPORT XML. protoxide vendors go-webdav with an additive patch to emit
 the CalendarServer `getctag` property, which lets clients detect changes without
 rescanning; we want that patch too.
 
+## Serving CalDAV
+
+go-webdav derives a resource's kind from **path depth**, not from anything the
+backend says, so the URL layout is not a free choice:
+
+| Depth | Resource | Path |
+|---|---|---|
+| 1 | principal | `/principal/` |
+| 2 | calendar home set | `/principal/calendars/` |
+| 3 | calendar | `/principal/calendars/{token}/` |
+| 4 | event | `/principal/calendars/{token}/{uid}.ics` |
+
+Putting the principal at `/` looks tidier and quietly breaks discovery: the
+root is its own resource type and serves only `current-user-principal`.
+
+Two mappings are needed between Proton and URLs:
+
+- **Calendar IDs** are base64 with `=` padding, which does not belong in a path,
+  so a path segment is the first half of their SHA-256.
+- **Resource names** are the client's to choose, and need not be the event UID.
+  carbonate advertises UID-based names, but remembers what a client called
+  something it PUT, or a later GET or DELETE at that path cannot find the event.
+
+Reads are cached for 30 seconds, and the cache is dropped whenever we write.
+That is a placeholder for driving it from Proton's event loop.
+
+`getctag` is missing from go-webdav 0.7.0, so clients re-read the object list
+on every sync rather than being told nothing changed. ETags still let them skip
+fetching individual events.
+
 ## Packages
 
 - `internal/proton` — Proton's private API: auth, key unlocking, event loop.
@@ -59,8 +89,8 @@ rescanning; we want that patch too.
   locally generated bridge password. **Transparent token refresh lives here.**
 - `internal/cache` — decrypted events and contacts on disk, keyed by a URL-safe
   path token so DAV requests resolve to Proton IDs in O(1). Files are 0600.
-- `internal/caldav` — CalDAV backend over Proton Calendar.
-- `internal/carddav` — CardDAV backend over Proton Contacts.
+- `internal/calendar` — reading, decrypting, splitting and writing events.
+- `internal/caldav` — go-webdav backend mapping CalDAV onto the above.
 
 ## Verified against a live account
 
