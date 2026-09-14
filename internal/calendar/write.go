@@ -2,7 +2,9 @@ package calendar
 
 import (
 	"context"
+	"crypto/sha1"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"strconv"
 	"strings"
@@ -33,6 +35,10 @@ var (
 
 	calendarSigned    = []string{"UID", "DTSTAMP", "EXDATE", "STATUS", "TRANSP"}
 	calendarEncrypted = []string{"UID", "DTSTAMP", "COMMENT"}
+
+	// Attendees travel in their own encrypted part, under the shared session
+	// key so that everyone invited can read them.
+	attendeeEncrypted = []string{"UID", "DTSTAMP", "ATTENDEE"}
 )
 
 // required are the properties every card carries, so that a card can be
@@ -46,13 +52,30 @@ type card struct {
 }
 
 type eventData struct {
-	SharedKeyPacket      string `json:",omitempty"`
-	SharedEventContent   []card `json:",omitempty"`
-	CalendarKeyPacket    string `json:",omitempty"`
-	CalendarEventContent []card `json:",omitempty"`
-	Permissions          int    `json:",omitempty"`
-	IsOrganizer          int    `json:",omitempty"`
+	SharedKeyPacket       string     `json:",omitempty"`
+	SharedEventContent    []card     `json:",omitempty"`
+	CalendarKeyPacket     string     `json:",omitempty"`
+	CalendarEventContent  []card     `json:",omitempty"`
+	AttendeesEventContent []card     `json:",omitempty"`
+	Attendees             []attendee `json:",omitempty"`
+	Permissions           int        `json:",omitempty"`
+	IsOrganizer           int        `json:",omitempty"`
 }
+
+// attendee is the part of an invitation Proton keeps in the clear, so that it
+// can track replies without being able to read who was invited.
+type attendee struct {
+	Token  string
+	Status int
+}
+
+// Attendee reply states, as Proton numbers them.
+const (
+	statusNeedsAction = 0
+	statusTentative   = 1
+	statusDeclined    = 2
+	statusAccepted    = 3
+)
 
 type createEntry struct {
 	Overwrite int
@@ -261,7 +284,7 @@ func buildEvent(event *ical.Event, keys *proton.CalendarKeys, existing *api.Cale
 
 	// Properties we do not recognise are encrypted rather than published:
 	// hiding what we do not understand is the safe default.
-	known := append(append(append(append([]string{}, sharedSigned...), sharedEncrypted...), calendarSigned...), calendarEncrypted...)
+	known := append(append(append(append(append([]string{}, sharedSigned...), sharedEncrypted...), calendarSigned...), calendarEncrypted...), attendeeEncrypted...)
 	extra := unknownProps(event, known)
 
 	// IsOrganizer stays 1: carbonate only writes events on calendars it owns.
@@ -287,7 +310,120 @@ func buildEvent(event *ical.Event, keys *proton.CalendarKeys, existing *api.Cale
 	data.CalendarEventContent = calendar.cards
 	data.CalendarKeyPacket = calendar.keyPacket
 
+	// Attendees share the event's session key, so they are built after the
+	// shared part has settled which key that is.
+	attendees, clear, err := buildAttendees(event, keys, data.SharedKeyPacket, sharedPacket)
+	if err != nil {
+		return nil, err
+	}
+
+	data.AttendeesEventContent = attendees
+	data.Attendees = clear
+
 	return data, nil
+}
+
+// buildAttendees renders the attendee part and the clear list Proton keeps
+// beside it.
+//
+// Every attendee is identified by a token rather than an address: Proton
+// tracks replies without learning who was invited. The token is a hash of the
+// event UID and the address, so both sides derive the same one.
+func buildAttendees(event *ical.Event, keys *proton.CalendarKeys, newPacket, oldPacket string) ([]card, []attendee, error) {
+	fields := event.Props["ATTENDEE"]
+	if len(fields) == 0 {
+		return nil, nil, nil
+	}
+
+	uid := ""
+	if p := event.Props.Get("UID"); p != nil {
+		uid = strings.TrimSpace(p.Value)
+	}
+
+	clear := make([]attendee, 0, len(fields))
+
+	// Index rather than range over a copy: the token has to be written back
+	// into the event, and a copied Prop with a nil Params map would drop it.
+	for i := range fields {
+		field := &fields[i]
+
+		token := attendeeToken(uid, field.Value)
+
+		if field.Params == nil {
+			field.Params = ical.Params{}
+		}
+
+		field.Params.Set("X-PM-TOKEN", token)
+
+		clear = append(clear, attendee{Token: token, Status: partstat(field)})
+	}
+
+	body := pick(event, attendeeEncrypted)
+	if body == "" {
+		return nil, nil, nil
+	}
+
+	signature, err := sign(keys.AddrKR, body)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Reuse whichever shared session key the event ended up with: a freshly
+	// minted one on create, or the stored packet on update.
+	packet := newPacket
+	if packet == "" {
+		packet = oldPacket
+	}
+
+	sessionKey, _, err := sessionKeyFor(keys, packet)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	encrypted, err := sessionKey.Encrypt(crypto.NewPlainMessageFromString(body))
+	if err != nil {
+		return nil, nil, fmt.Errorf("encrypting attendees: %w", err)
+	}
+
+	return []card{{
+		Type:      cardEncryptedAndSigned,
+		Data:      base64.StdEncoding.EncodeToString(encrypted),
+		Signature: signature,
+	}}, clear, nil
+}
+
+// attendeeToken identifies an attendee without naming them.
+//
+// SHA-1 is not a security choice here — Proton uses it as an identifier, and
+// both ends must agree — so it is used deliberately rather than by oversight.
+func attendeeToken(uid, address string) string {
+	sum := sha1.Sum([]byte(uid + normaliseAddress(address)))
+
+	return hex.EncodeToString(sum[:])
+}
+
+// normaliseAddress strips the mailto: scheme and lowercases, so the same
+// person yields the same token however a client wrote them down.
+func normaliseAddress(address string) string {
+	return strings.ToLower(strings.TrimPrefix(strings.TrimSpace(address), "mailto:"))
+}
+
+// partstat maps an iCalendar reply state onto Proton's.
+func partstat(field *ical.Prop) int {
+	if field.Params == nil {
+		return statusNeedsAction
+	}
+
+	switch strings.ToUpper(field.Params.Get("PARTSTAT")) {
+	case "ACCEPTED":
+		return statusAccepted
+	case "DECLINED":
+		return statusDeclined
+	case "TENTATIVE":
+		return statusTentative
+	default:
+		return statusNeedsAction
+	}
 }
 
 type cardSet struct {

@@ -6,8 +6,8 @@ can talk to Proton.
 
 > **Status: calendars and contacts both work.** `carbonate serve` exposes
 > Proton Calendar over CalDAV and Proton Contacts over CardDAV, reads and
-> writes verified against live Proton. See [Roadmap](#roadmap) for what is
-> still missing — attendees, most notably.
+> writes verified against live Proton, attendees included. See
+> [Roadmap](#roadmap) for what is still missing.
 
 ## Why
 
@@ -145,7 +145,8 @@ revocation are all exercised without a real account or network access.
 - [ ] `getctag` and sync-token, so clients need not re-read everything
 - [ ] Event-loop driven cache instead of a short TTL
 - [x] Contacts: decrypt, split, and serve over CardDAV
-- [ ] Attendees — currently accepted and then silently dropped by Proton
+- [x] Attendees: tokens, encrypted attendee part, RSVP status
+- [ ] Invitations by mail, so an attendee is told they were invited
 - [ ] Event-loop poller and delta sync, mapped to DAV ctag / sync-token
 - [ ] Write path: create, edit, delete round-tripping to Proton
 - [ ] Recurrence exceptions and attendees

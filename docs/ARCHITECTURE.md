@@ -261,6 +261,7 @@ This is the table I expected to have to derive by experiment:
 | Shared | encrypted + signed | `uid` `dtstamp` `created` `description` `summary` `location` |
 | Calendar | signed | `uid` `dtstamp` `exdate` `status` `transp` |
 | Calendar | encrypted + signed | `uid` `dtstamp` `comment` |
+| Attendees | encrypted + signed | `uid` `dtstamp` `attendee` |
 
 `uid` and `dtstamp` repeat in every card — which is exactly what the live event
 showed on the read side, and why reassembly has to collapse them.
@@ -275,6 +276,38 @@ Two rules that are not obvious from the table:
 
 VALARM does not go into an ICS part at all; alarms travel as a separate
 `Notifications` JSON field on the event.
+
+### Attendees
+
+protoxide leaves this unimplemented, so the shape below is read from Proton's
+own web client (`packages/shared/lib/calendar/formatData.ts` and
+`attendees.ts`).
+
+An attendee appears in two places at once:
+
+- **`AttendeesEventContent`** — the `ATTENDEE` properties, encrypted under the
+  *shared* session key so that everyone invited can read them, and signed.
+- **`Attendees`** — a clear list of `{Token, Status}`. Proton tracks replies
+  without ever learning who was invited.
+
+The token is `SHA1(uid + normalisedEmail)`, hex-encoded, and is written back
+into the event as an `X-PM-TOKEN` parameter. Both ends derive it from the same
+inputs, so it has to match exactly: strip `mailto:` and lowercase. SHA-1 is
+Proton's choice of identifier, not a security decision.
+
+Status maps onto the same integers as iCalendar's PARTSTAT:
+
+| `PARTSTAT` | Proton |
+|---|---|
+| `NEEDS-ACTION` | 0 |
+| `TENTATIVE` | 1 |
+| `DECLINED` | 2 |
+| `ACCEPTED` | 3 |
+
+Not implemented: `AddedProtonAttendees`, which hands the shared session key to
+a Proton-internal attendee's address key so they can open the event, and
+`RemovedAttendeeAddresses`. Invitations themselves travel by mail at Proton and
+carbonate sends none, so an attendee is recorded but not notified.
 
 ### Three ways Proton rejects a write
 

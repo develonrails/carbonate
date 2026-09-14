@@ -240,3 +240,120 @@ func TestParseEventRejectsGarbage(t *testing.T) {
 		t.Error("garbage input was accepted")
 	}
 }
+
+const meeting = `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//carbonate//test//EN
+BEGIN:VEVENT
+UID:meeting@carbonate.local
+DTSTAMP:20260914T220000Z
+DTSTART:20260924T140000Z
+SUMMARY:Standup
+ORGANIZER;CN=Org:mailto:org@example.com
+ATTENDEE;CN=Alice;PARTSTAT=NEEDS-ACTION:mailto:alice@example.com
+ATTENDEE;CN=Bob;PARTSTAT=ACCEPTED:mailto:BOB@Example.COM
+END:VEVENT
+END:VCALENDAR
+`
+
+// Both ends derive the token from the same inputs, so it must depend on the
+// event and the address and nothing else.
+func TestAttendeeToken(t *testing.T) {
+	a := attendeeToken("event@example.com", "mailto:alice@example.com")
+
+	if len(a) != 40 {
+		t.Errorf("token %q is not a 40-character SHA-1 hex digest", a)
+	}
+
+	if a != attendeeToken("event@example.com", "alice@example.com") {
+		t.Error("the mailto: scheme changed the token")
+	}
+
+	if a != attendeeToken("event@example.com", "ALICE@EXAMPLE.COM") {
+		t.Error("address case changed the token")
+	}
+
+	if a == attendeeToken("other@example.com", "alice@example.com") {
+		t.Error("two different events produced the same token for one address")
+	}
+
+	if a == attendeeToken("event@example.com", "bob@example.com") {
+		t.Error("two different addresses produced the same token")
+	}
+}
+
+func TestNormaliseAddress(t *testing.T) {
+	for in, want := range map[string]string{
+		"mailto:Alice@Example.com": "alice@example.com",
+		"  bob@example.com  ":      "bob@example.com",
+		"MAILTO:x@y.z":             "mailto:x@y.z",
+	} {
+		if got := normaliseAddress(in); got != want {
+			t.Errorf("normaliseAddress(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestPartstat(t *testing.T) {
+	cases := map[string]int{
+		"ACCEPTED":     statusAccepted,
+		"DECLINED":     statusDeclined,
+		"TENTATIVE":    statusTentative,
+		"NEEDS-ACTION": statusNeedsAction,
+		"nonsense":     statusNeedsAction,
+	}
+
+	for value, want := range cases {
+		prop := &ical.Prop{Name: "ATTENDEE", Params: ical.Params{}}
+		prop.Params.Set("PARTSTAT", value)
+
+		if got := partstat(prop); got != want {
+			t.Errorf("partstat(%q) = %d, want %d", value, got, want)
+		}
+	}
+
+	// An attendee with no parameters at all has simply not replied.
+	if got := partstat(&ical.Prop{Name: "ATTENDEE"}); got != statusNeedsAction {
+		t.Errorf("partstat with no params = %d, want %d", got, statusNeedsAction)
+	}
+}
+
+// Attendees must land in their own encrypted part, never in a signed card
+// where the server could read who was invited.
+func TestAttendeesAreNotInSignedCards(t *testing.T) {
+	event := parse(t, meeting)
+
+	for _, set := range [][]string{sharedSigned, calendarSigned} {
+		if body := pick(event, set); strings.Contains(body, "alice@example.com") {
+			t.Errorf("an attendee leaked into a signed card:\n%s", body)
+		}
+	}
+
+	if body := pick(event, attendeeEncrypted); !strings.Contains(body, "alice@example.com") {
+		t.Errorf("the attendee part does not contain the attendee:\n%s", body)
+	}
+}
+
+// ORGANIZER is deliberately in the signed part: Proton needs it, and it is not
+// a secret from the people invited.
+func TestOrganizerStaysInTheSharedSignedCard(t *testing.T) {
+	event := parse(t, meeting)
+
+	if body := pick(event, sharedSigned); !strings.Contains(body, "ORGANIZER") {
+		t.Errorf("ORGANIZER is missing from the shared signed card:\n%s", body)
+	}
+}
+
+// ATTENDEE must not also be treated as an unknown property, or every attendee
+// would be duplicated into the shared encrypted card as well.
+func TestAttendeeIsNotTreatedAsUnknown(t *testing.T) {
+	event := parse(t, meeting)
+
+	known := append(append(append(append(append([]string{}, sharedSigned...), sharedEncrypted...), calendarSigned...), calendarEncrypted...), attendeeEncrypted...)
+
+	for _, name := range unknownProps(event, known) {
+		if name == "ATTENDEE" {
+			t.Error("ATTENDEE was classified as an unknown property")
+		}
+	}
+}
