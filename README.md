@@ -109,6 +109,12 @@ In GNOME Calendar: **Calendars → Add calendar → Add from web**. Evolution,
 Thunderbird and DAVx5 take the same three values. `/.well-known/caldav` and
 `/.well-known/carddav` both redirect to the right principal.
 
+GNOME Contacts has no such dialog — see [docs/CLIENTS.md](docs/CLIENTS.md).
+
+Logging in again mints a new bridge password, which every client configured
+with the old one would then reject. `carbonate auth -keep-bridge-password`
+keeps the current one.
+
 HTTP is deliberately unencrypted: the listener binds to loopback only, and
 basic auth is there to stop other local processes reaching your calendar
 rather than to protect the wire.

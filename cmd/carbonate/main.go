@@ -71,6 +71,7 @@ func usage(w io.Writer) {
 
 Usage:
   carbonate auth <username>   log in to Proton and store an encrypted session
+                              (-keep-bridge-password to keep the current one)
   carbonate serve             serve CalDAV and CardDAV on localhost
   carbonate calendars         list calendars, and optionally their events
   carbonate event put         create or replace an event from iCalendar on stdin
@@ -98,6 +99,7 @@ func cmdAuth(ctx context.Context, args []string, out io.Writer) error {
 	fs.SetOutput(out)
 	path := fs.String("session", "", "path to the session file (default: user config dir)")
 	passwordStdin := fs.Bool("password-stdin", false, "read the password, and any further answers, from stdin one line at a time")
+	keepBridgePassword := fs.Bool("keep-bridge-password", false, "reuse the existing bridge password instead of generating a new one")
 
 	if err := fs.Parse(reorderArgs(args, authFlagsWithValues)); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -132,13 +134,22 @@ func cmdAuth(ctx context.Context, args []string, out io.Writer) error {
 		return err
 	}
 
-	bridgePassword, err := session.NewBridgePassword()
+	// Logging in again would otherwise mint a new bridge password and break
+	// every client already configured with the old one.
+	bridgePassword, reused, err := bridgePasswordForAuth(*keepBridgePassword)
 	if err != nil {
 		return err
 	}
 
 	if err := session.Save(sessionPath, bridgePassword, sess); err != nil {
 		return err
+	}
+
+	if reused {
+		fmt.Fprintf(out, "\nLogged in as %s. Session written to %s\n\nYour existing bridge password still works; clients need no change.\n",
+			sess.Username, sessionPath)
+
+		return nil
 	}
 
 	fmt.Fprintf(out, `
@@ -150,9 +161,37 @@ Bridge password: %s
 
 This is shown once. It encrypts the session file, and your DAV clients will
 use it as their password. Store it in your password manager now.
+
+Logging in again generates a new one, which every configured client would
+then reject. Pass -keep-bridge-password to keep this one.
 `, sess.Username, sessionPath, bridgePassword)
 
 	return nil
+}
+
+// bridgePasswordForAuth returns the password to encrypt the new session with,
+// reporting whether an existing one was kept.
+func bridgePasswordForAuth(keep bool) (string, bool, error) {
+	if !keep {
+		password, err := session.NewBridgePassword()
+
+		return password, false, err
+	}
+
+	if password := os.Getenv("CARBONATE_BRIDGE_PASSWORD"); password != "" {
+		return password, true, nil
+	}
+
+	buf, err := terminalPrompter{}.Password("Existing bridge password: ")
+	if err != nil {
+		return "", false, err
+	}
+
+	if len(buf) == 0 {
+		return "", false, errors.New("no bridge password given")
+	}
+
+	return string(buf), true, nil
 }
 
 // cmdServe starts the CalDAV and CardDAV endpoints and the Proton event-loop

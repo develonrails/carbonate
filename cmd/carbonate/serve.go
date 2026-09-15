@@ -53,8 +53,8 @@ Serving on http://%[1]s — sign in as %[2]s with your bridge password.
   Contacts   http://%[1]s/carddav/
 
 GNOME Calendar: Calendars -> Add calendar -> Add from web.
-GNOME Contacts goes through Online Accounts, or add the CardDAV address in
-Evolution directly.
+GNOME Contacts has no such dialog; see docs/CLIENTS.md for the one-file
+address book setup it reads instead.
 `, listener.Addr(), username)
 
 	done := make(chan error, 1)

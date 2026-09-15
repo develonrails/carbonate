@@ -180,3 +180,43 @@ func TestSessionStorePersistIsConcurrencySafe(t *testing.T) {
 		t.Fatalf("session file is unreadable after concurrent writes: %v", err)
 	}
 }
+
+// Logging in again used to mint a new bridge password, which every client
+// already configured with the old one would then reject.
+func TestBridgePasswordForAuthCanKeepTheExistingOne(t *testing.T) {
+	t.Setenv("CARBONATE_BRIDGE_PASSWORD", "already-in-use")
+
+	got, reused, err := bridgePasswordForAuth(true)
+	if err != nil {
+		t.Fatalf("bridgePasswordForAuth: %v", err)
+	}
+
+	if !reused {
+		t.Error("the existing password was not reported as reused")
+	}
+
+	if got != "already-in-use" {
+		t.Errorf("password = %q, want the existing one", got)
+	}
+}
+
+func TestBridgePasswordForAuthGeneratesByDefault(t *testing.T) {
+	t.Setenv("CARBONATE_BRIDGE_PASSWORD", "already-in-use")
+
+	got, reused, err := bridgePasswordForAuth(false)
+	if err != nil {
+		t.Fatalf("bridgePasswordForAuth: %v", err)
+	}
+
+	if reused {
+		t.Error("a fresh login reported reusing a password")
+	}
+
+	if got == "already-in-use" {
+		t.Error("the environment password was used without being asked for")
+	}
+
+	if len(got) < 16 {
+		t.Errorf("generated password %q is too short to be a credential", got)
+	}
+}
