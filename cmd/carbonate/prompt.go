@@ -35,6 +35,17 @@ func (terminalPrompter) Password(prompt string) ([]byte, error) {
 	return buf, nil
 }
 
+// Verify shows Proton's challenge and waits for the token brought back.
+//
+// The URL is printed rather than opened: carbonate runs headless as often as
+// not, and a browser that appears unbidden is worse than one the person
+// starts themselves.
+func (p terminalPrompter) Verify(message string) (string, error) {
+	fmt.Fprintf(os.Stderr, "\n%s\n\n", message)
+
+	return p.Line("Verification token: ")
+}
+
 // Line reads a visible line, such as a TOTP code.
 func (terminalPrompter) Line(prompt string) (string, error) {
 	fmt.Fprint(os.Stderr, prompt)

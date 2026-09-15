@@ -58,8 +58,13 @@ func (b *bridge) hasSession() bool {
 // key that unlocks your data is separate from the one that proves who you
 // are. Most accounts use one password for both.
 type guiPrompter struct {
-	mailbox   []byte
-	twoFactor string
+	mailbox      []byte
+	twoFactor    string
+	verification string
+
+	// onVerify is called with Proton's message when a challenge is needed,
+	// so the window can show the URL rather than swallow it.
+	onVerify func(message string)
 }
 
 func (p guiPrompter) Password(string) ([]byte, error) {
@@ -78,9 +83,23 @@ func (p guiPrompter) Line(string) (string, error) {
 	return p.twoFactor, nil
 }
 
+// Verify hands back a token already in the window, and otherwise shows what
+// Proton is asking for so the person can fetch one.
+func (p guiPrompter) Verify(message string) (string, error) {
+	if p.verification == "" {
+		if p.onVerify != nil {
+			p.onVerify(message)
+		}
+
+		return "", errors.New("open the link above, solve the challenge, and paste the token into the verification field")
+	}
+
+	return p.verification, nil
+}
+
 // login signs in to Proton and stores the session, returning the bridge
 // password the user must give to their apps.
-func (b *bridge) login(ctx context.Context, username string, password []byte, twoFactor, mailboxPassword string) (string, error) {
+func (b *bridge) login(ctx context.Context, username string, password []byte, twoFactor, mailboxPassword, verification string, onVerify func(string)) (string, error) {
 	if b.path == "" {
 		return "", errors.New("no configuration directory to store the session in")
 	}
@@ -92,7 +111,12 @@ func (b *bridge) login(ctx context.Context, username string, password []byte, tw
 		mailbox = password
 	}
 
-	sess, err := proton.Login(ctx, username, password, guiPrompter{mailbox: mailbox, twoFactor: twoFactor})
+	sess, err := proton.Login(ctx, username, password, guiPrompter{
+		mailbox:      mailbox,
+		twoFactor:    twoFactor,
+		verification: verification,
+		onVerify:     onVerify,
+	})
 	if err != nil {
 		return "", err
 	}

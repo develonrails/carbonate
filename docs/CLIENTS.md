@@ -41,6 +41,26 @@ ones, so requests eventually fail for reasons that look unrelated;
 `-revoke-stale` ends carbonate's own earlier sessions and leaves other clients
 alone.
 
+## If Proton asks for human verification
+
+Proton sometimes wants proof that a person is present. carbonate prints a link,
+you open it, solve the challenge, and paste back the token it gives you:
+
+```
+Proton wants human verification (captcha). Open this, solve it, and paste the
+token it gives you:
+  https://verify.proton.me/?embed=false&methods=captcha&token=...
+
+Verification token:
+```
+
+The link is printed rather than opened, since carbonate often runs without a
+desktop. Unattended login reads the token as the next line of standard input,
+which only helps if you already had a browser.
+
+The window has a **Verification token** field; leave it empty until the link
+appears below the form, then fill it in and log in again.
+
 ## Two-password accounts
 
 Proton accounts can keep two passwords apart:

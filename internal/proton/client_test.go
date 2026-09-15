@@ -39,11 +39,13 @@ func newTestServer(t *testing.T) (*server.Server, string) {
 // stubPrompter answers interactive prompts without a terminal. It records what
 // it was asked, so tests can assert that login did not prompt unnecessarily.
 type stubPrompter struct {
-	password []byte
-	line     string
+	password     []byte
+	line         string
+	verification string
 
 	passwordPrompts []string
 	linePrompts     []string
+	verifyPrompts   []string
 }
 
 func (p *stubPrompter) Password(prompt string) ([]byte, error) {
@@ -54,6 +56,11 @@ func (p *stubPrompter) Password(prompt string) ([]byte, error) {
 func (p *stubPrompter) Line(prompt string) (string, error) {
 	p.linePrompts = append(p.linePrompts, prompt)
 	return p.line, nil
+}
+
+func (p *stubPrompter) Verify(message string) (string, error) {
+	p.verifyPrompts = append(p.verifyPrompts, message)
+	return p.verification, nil
 }
 
 func TestLogin(t *testing.T) {

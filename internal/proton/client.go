@@ -59,6 +59,10 @@ type Prompter interface {
 	Password(prompt string) ([]byte, error)
 	// Line reads a visible line, such as a TOTP code.
 	Line(prompt string) (string, error)
+	// Verify answers a human-verification challenge: the caller shows the
+	// message, which contains a URL, and returns the token the person brings
+	// back. Returning an error abandons the login.
+	Verify(message string) (string, error)
 }
 
 // Conn is a live, authenticated connection to Proton.
@@ -297,6 +301,21 @@ func (c *Conn) RevokeSession(ctx context.Context, uid string) error {
 	return c.Client.AuthRevoke(ctx, uid)
 }
 
+// verifyAndRetry asks a person to answer Proton's challenge and tries the
+// login again with their answer.
+func verifyAndRetry(ctx context.Context, m *api.Manager, username string, password []byte, details *api.APIHVDetails, p Prompter) (*api.Client, api.Auth, error) {
+	token, err := p.Verify(describeVerification(details))
+	if err != nil {
+		return nil, api.Auth{}, fmt.Errorf("%w: %v", ErrVerificationNeeded, err)
+	}
+
+	if strings.TrimSpace(token) == "" {
+		return nil, api.Auth{}, ErrVerificationNeeded
+	}
+
+	return m.NewClientWithLoginWithHVToken(ctx, username, password, solved(details, token))
+}
+
 // PrimaryAddressKeyRing unlocks the keys of the account's primary address.
 //
 // Contacts are encrypted to it rather than to a per-collection key, so this is
@@ -456,6 +475,14 @@ func Login(ctx context.Context, username string, loginPassword []byte, p Prompte
 	defer m.Close()
 
 	c, auth, err := m.NewClientWithLogin(ctx, username, loginPassword)
+
+	// Proton may ask for proof that a person is present. The challenge has to
+	// be answered in a browser, so the login is retried with what they bring
+	// back rather than solved here.
+	if details := humanVerification(err); details != nil {
+		c, auth, err = verifyAndRetry(ctx, m, username, loginPassword, details, p)
+	}
+
 	if err != nil {
 		return nil, fmt.Errorf("login failed: %w", explainVersion(err))
 	}

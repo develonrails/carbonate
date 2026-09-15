@@ -149,6 +149,11 @@ func (u *ui) loginPage() *gtk.Box {
 	mailbox := gtk.NewPasswordEntry()
 	mailbox.SetShowPeekIcon(true)
 
+	// Only needed when Proton asks for proof that a person is present; the
+	// link to answer it appears below when that happens.
+	verification := gtk.NewEntry()
+	verification.SetPlaceholderText("Only if asked for below")
+
 	button := gtk.NewButtonWithLabel("Log in")
 	button.AddCSSClass("suggested-action")
 
@@ -157,6 +162,7 @@ func (u *ui) loginPage() *gtk.Box {
 	page.Append(field("Password", password))
 	page.Append(field("Two-factor code", twoFactor))
 	page.Append(field("Mailbox password (only if separate from the one above)", mailbox))
+	page.Append(field("Verification token", verification))
 	page.Append(button)
 
 	button.ConnectClicked(func() {
@@ -164,6 +170,7 @@ func (u *ui) loginPage() *gtk.Box {
 		pass := password.Text()
 		code := twoFactor.Text()
 		mailboxPass := mailbox.Text()
+		token := verification.Text()
 
 		if user == "" || pass == "" {
 			u.say("Fill in your Proton address and password.")
@@ -177,7 +184,8 @@ func (u *ui) loginPage() *gtk.Box {
 		go func() {
 			defer glib.IdleAdd(func() { button.SetSensitive(true) })
 
-			bridgePassword, err := u.bridge.login(context.Background(), user, []byte(pass), code, mailboxPass)
+			bridgePassword, err := u.bridge.login(context.Background(), user, []byte(pass), code, mailboxPass, token,
+				func(message string) { u.say("%s", message) })
 			if err != nil {
 				u.say("Login failed: %v", err)
 

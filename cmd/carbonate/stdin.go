@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 )
 
@@ -33,6 +34,17 @@ func (p *stdinPrompter) Password(prompt string) ([]byte, error) {
 
 func (p *stdinPrompter) Line(prompt string) (string, error) {
 	return p.readLine(prompt)
+}
+
+// Verify reads a token from stdin like any other answer.
+//
+// The challenge has to be solved in a browser, so an unattended login can
+// only work if whoever prepared the input already had one — which is worth
+// saying on the way past rather than failing silently.
+func (p *stdinPrompter) Verify(message string) (string, error) {
+	fmt.Fprintf(os.Stderr, "\n%s\n\n", message)
+
+	return p.readLine("Verification token: ")
 }
 
 func (p *stdinPrompter) readLine(prompt string) (string, error) {

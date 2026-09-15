@@ -27,6 +27,8 @@ func (p *recordingPrompter) Line(prompt string) (string, error) {
 	return "", nil
 }
 
+func (p *recordingPrompter) Verify(string) (string, error) { return "", nil }
+
 // Most accounts use one password for both jobs, and asking for a second one
 // would be a question the user cannot answer.
 func TestMailboxPasswordReusedInOnePasswordMode(t *testing.T) {
@@ -85,6 +87,7 @@ type failingPrompter struct{ err error }
 
 func (p failingPrompter) Password(string) ([]byte, error) { return nil, p.err }
 func (p failingPrompter) Line(string) (string, error)     { return "", p.err }
+func (p failingPrompter) Verify(string) (string, error)   { return "", p.err }
 
 // Proton answers a request the session may no longer make with a bare
 // complaint about scope, which reads as a permissions fault. It is really an
