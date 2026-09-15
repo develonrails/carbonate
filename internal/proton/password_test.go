@@ -6,8 +6,6 @@ import (
 	"testing"
 
 	api "github.com/ProtonMail/go-proton-api"
-
-	"github.com/develonrails/carbonate/internal/session"
 )
 
 // recordingPrompter answers prompts and remembers what it was asked, so a
@@ -114,21 +112,6 @@ func TestExplainScopeLeavesOtherErrorsAlone(t *testing.T) {
 
 	if explainScope(nil) != nil {
 		t.Error("nil was turned into an error")
-	}
-}
-
-// Resuming a session rotates its refresh token and discards the old one, so a
-// callback that does nothing leaves whatever is saved afterwards holding a
-// token Proton has already thrown away.
-func TestTrackWritesRotatedTokensBack(t *testing.T) {
-	s := &session.Session{UID: "old-uid", RefreshToken: "old-token"}
-
-	if err := Track(s)("new-uid", "new-token"); err != nil {
-		t.Fatalf("Track: %v", err)
-	}
-
-	if s.UID != "new-uid" || s.RefreshToken != "new-token" {
-		t.Errorf("session = %+v, want the rotated values", s)
 	}
 }
 

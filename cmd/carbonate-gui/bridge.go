@@ -127,24 +127,13 @@ func (b *bridge) unlock(ctx context.Context, bridgePassword string) error {
 	return b.connect(ctx)
 }
 
-// connect resumes the Proton session, persisting rotated tokens as it goes.
+// connect resumes the Proton session, storing rotated tokens as it goes.
 func (b *bridge) connect(ctx context.Context) error {
 	b.mu.Lock()
 	sess, password := b.sess, b.password
 	b.mu.Unlock()
 
-	conn, err := proton.Resume(ctx, sess, func(uid, refreshToken string) error {
-		b.mu.Lock()
-		defer b.mu.Unlock()
-
-		if sess.UID == uid && sess.RefreshToken == refreshToken {
-			return nil
-		}
-
-		sess.UID, sess.RefreshToken = uid, refreshToken
-
-		return session.Save(b.path, password, sess)
-	})
+	conn, err := proton.Resume(ctx, session.NewFile(b.path, password, sess))
 	if err != nil {
 		return err
 	}

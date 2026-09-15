@@ -237,9 +237,16 @@ DAV `ctag` / `sync-token` so clients fetch just the delta.
   to unlock any key" instead. `unlock` handles both, and still checks
   `CountDecryptionEntities()`.
 - **Refresh tokens rotate.** Proton discards the old token the moment it issues
-  a new one, so `Resume` persists before doing anything else that can fail, and
-  registers an auth handler for later refreshes. Dropping a rotated token locks
-  the user out until they log in again.
+  a new one, so `Resume` stores it before doing anything else that can fail,
+  and again on every later refresh. Dropping a rotated token locks the user out
+  until they log in again.
+
+  `Resume` takes a `TokenStore` rather than a callback, and that is the whole
+  point: a callback that does nothing compiles, runs, and leaves the stored
+  session holding a dead token — a failure that surfaces much later as an
+  account that appears broken. Three such callbacks were written during this
+  project, one of them in code that shipped, before the shape was changed to
+  one that cannot forget.
 - **The app version is validated.** Proton rejects clients it does not
   recognise, so `CARBONATE_APP_VERSION` exists as an escape hatch.
 - **The fake server serves TLS by default** with a self-signed certificate that

@@ -11,7 +11,6 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"sync"
 	"syscall"
 
 	"github.com/develonrails/carbonate/internal/proton"
@@ -198,9 +197,10 @@ func retireOldSession(ctx context.Context, path, bridgePassword string, fresh *s
 		return
 	}
 
-	// Resuming rotates the refresh token, so the rotation has to land in the
-	// session about to be saved.
-	conn, err := proton.Resume(ctx, fresh, proton.Track(fresh))
+	// Resuming rotates the refresh token. Handing over the file the session
+	// is about to be written to means the rotation is kept whatever happens
+	// next.
+	conn, err := proton.Resume(ctx, session.NewFile(path, bridgePassword, fresh))
 	if err != nil {
 		return
 	}
@@ -286,30 +286,6 @@ func resolvePath(override string) (string, error) {
 	return session.DefaultPath()
 }
 
-// sessionStore rewrites the session file when Proton rotates the refresh
-// token. Proton discards the old token at that moment, so this must not be
-// skipped or deferred.
-type sessionStore struct {
-	mu       sync.Mutex
-	path     string
-	password string
-	sess     *session.Session
-}
-
-func (s *sessionStore) persist(uid, refreshToken string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.sess.UID == uid && s.sess.RefreshToken == refreshToken {
-		return nil
-	}
-
-	s.sess.UID = uid
-	s.sess.RefreshToken = refreshToken
-
-	return session.Save(s.path, s.password, s.sess)
-}
-
 // connect loads the stored session and resumes it, prompting for the bridge
 // password unless CARBONATE_BRIDGE_PASSWORD is set.
 func connect(ctx context.Context, pathOverride string) (*proton.Conn, error) {
@@ -347,16 +323,14 @@ func resume(ctx context.Context, sessionPath, password string) (*proton.Conn, er
 		return nil, err
 	}
 
-	sess, err := session.Load(sessionPath, password)
+	store, err := session.OpenFile(sessionPath, password)
 	if err != nil {
 		guard.Release()
 
 		return nil, err
 	}
 
-	store := &sessionStore{path: sessionPath, password: password, sess: sess}
-
-	conn, err := proton.Resume(ctx, sess, store.persist)
+	conn, err := proton.Resume(ctx, store)
 	if err != nil {
 		guard.Release()
 

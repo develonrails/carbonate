@@ -514,32 +514,28 @@ func mailboxPasswordFor(auth api.Auth, loginPassword []byte, p Prompter) ([]byte
 	return p.Password("Mailbox password: ")
 }
 
-// PersistFunc is called whenever Proton hands out a new refresh token. The
-// old token is dead at that point, so failing to persist the new one locks
-// the user out until they log in again.
+// TokenStore is a session together with somewhere to keep it.
 //
-// A callback that does nothing is never correct, however short-lived the
-// connection: the rotation has already happened by the time it is called.
-// Use Track for the common case.
-type PersistFunc func(uid, refreshToken string) error
+// Resume takes this rather than a callback deliberately. Proton rotates the
+// refresh token on every use and discards the old one, so a callback that
+// does nothing leaves the stored session holding a dead token — and it
+// compiles, runs, and fails much later as an account that seems broken.
+// session.File satisfies this and cannot forget.
+type TokenStore interface {
+	// Session returns the session to resume.
+	Session() *session.Session
 
-// Track returns a PersistFunc that writes rotated tokens back into s.
-//
-// The caller is responsible for saving s afterwards. This exists because a
-// hand-written callback that forgets to do this leaves the stored session
-// holding a token Proton has already discarded, and the account only appears
-// broken later.
-func Track(s *session.Session) PersistFunc {
-	return func(uid, refreshToken string) error {
-		s.UID, s.RefreshToken = uid, refreshToken
-
-		return nil
-	}
+	// Update records rotated credentials and stores them.
+	Update(uid, refreshToken string) error
 }
 
-// Resume restores a stored session and unlocks the user's keys. persist is
-// called immediately with the rotated token and again on every later refresh.
-func Resume(ctx context.Context, s *session.Session, persist PersistFunc) (*Conn, error) {
+// Resume restores a stored session and unlocks the user's keys.
+//
+// The store is updated with the rotated token immediately, and again on every
+// later refresh.
+func Resume(ctx context.Context, store TokenStore) (*Conn, error) {
+	s := store.Session()
+
 	m := newManager()
 
 	c, auth, err := m.NewClientWithRefresh(ctx, s.UID, s.RefreshToken)
@@ -548,9 +544,9 @@ func Resume(ctx context.Context, s *session.Session, persist PersistFunc) (*Conn
 		return nil, fmt.Errorf("resuming session (re-run `carbonate auth`): %w", err)
 	}
 
-	// Refreshing already rotated the token, so persist before anything else
+	// Refreshing already rotated the token, so store it before anything else
 	// can fail and strand us with a token Proton has discarded.
-	if err := persist(auth.UID, auth.RefreshToken); err != nil {
+	if err := store.Update(auth.UID, auth.RefreshToken); err != nil {
 		c.Close()
 		m.Close()
 		return nil, fmt.Errorf("persisting refreshed token: %w", err)
@@ -570,8 +566,8 @@ func Resume(ctx context.Context, s *session.Session, persist PersistFunc) (*Conn
 	c.AddAuthHandler(func(a api.Auth) {
 		conn.setCredentials(a.UID, a.AccessToken)
 
-		if err := persist(a.UID, a.RefreshToken); err != nil {
-			fmt.Fprintf(os.Stderr, "carbonate: failed to persist refreshed token: %v\n", err)
+		if err := store.Update(a.UID, a.RefreshToken); err != nil {
+			fmt.Fprintf(os.Stderr, "carbonate: failed to store the refreshed token: %v\n", err)
 		}
 	})
 

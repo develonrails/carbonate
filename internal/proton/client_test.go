@@ -111,7 +111,7 @@ func TestResume(t *testing.T) {
 
 	sess := login(t)
 
-	conn, err := proton.Resume(context.Background(), sess, func(string, string) error { return nil })
+	conn, err := proton.Resume(context.Background(), &fakeStore{sess: sess})
 	if err != nil {
 		t.Fatalf("Resume: %v", err)
 	}
@@ -143,11 +143,12 @@ func TestResumePersistsRotatedToken(t *testing.T) {
 	var gotUID, gotToken string
 	var calls int
 
-	conn, err := proton.Resume(context.Background(), sess, func(uid, token string) error {
+	store := &fakeStore{sess: sess, onUpdate: func(uid, token string) {
 		calls++
 		gotUID, gotToken = uid, token
-		return nil
-	})
+	}}
+
+	conn, err := proton.Resume(context.Background(), store)
 	if err != nil {
 		t.Fatalf("Resume: %v", err)
 	}
@@ -174,7 +175,7 @@ func TestResumeFailsWhenPersistFails(t *testing.T) {
 	sess := login(t)
 	sentinel := errors.New("disk full")
 
-	conn, err := proton.Resume(context.Background(), sess, func(string, string) error { return sentinel })
+	conn, err := proton.Resume(context.Background(), &fakeStore{sess: sess, err: sentinel})
 	if err == nil {
 		conn.Close()
 		t.Fatal("Resume succeeded despite a failing persist callback")
@@ -191,7 +192,7 @@ func TestResumeWithBadRefreshToken(t *testing.T) {
 	sess := login(t)
 	sess.RefreshToken = "not-a-real-token"
 
-	conn, err := proton.Resume(context.Background(), sess, func(string, string) error { return nil })
+	conn, err := proton.Resume(context.Background(), &fakeStore{sess: sess})
 	if err == nil {
 		conn.Close()
 		t.Fatal("Resume succeeded with a bogus refresh token")
@@ -207,7 +208,7 @@ func TestResumeWrongMailboxPassword(t *testing.T) {
 	sess := login(t)
 	sess.MailboxPassword = []byte("not-the-mailbox-password")
 
-	conn, err := proton.Resume(context.Background(), sess, func(string, string) error { return nil })
+	conn, err := proton.Resume(context.Background(), &fakeStore{sess: sess})
 	if err == nil {
 		conn.Close()
 		t.Fatal("Resume succeeded with a wrong mailbox password")
@@ -227,7 +228,7 @@ func TestResumeAfterRevocation(t *testing.T) {
 		t.Fatalf("RevokeUser: %v", err)
 	}
 
-	conn, err := proton.Resume(context.Background(), sess, func(string, string) error { return nil })
+	conn, err := proton.Resume(context.Background(), &fakeStore{sess: sess})
 	if err == nil {
 		conn.Close()
 		t.Fatal("Resume succeeded after the session was revoked")
@@ -243,4 +244,27 @@ func login(t *testing.T) *session.Session {
 	}
 
 	return sess
+}
+
+// fakeStore stands in for the file a session is normally kept in.
+type fakeStore struct {
+	sess     *session.Session
+	onUpdate func(uid, refreshToken string)
+	err      error
+}
+
+func (f *fakeStore) Session() *session.Session { return f.sess }
+
+func (f *fakeStore) Update(uid, refreshToken string) error {
+	if f.onUpdate != nil {
+		f.onUpdate(uid, refreshToken)
+	}
+
+	if f.err != nil {
+		return f.err
+	}
+
+	f.sess.UID, f.sess.RefreshToken = uid, refreshToken
+
+	return nil
 }
