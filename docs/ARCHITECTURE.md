@@ -82,8 +82,22 @@ Two mappings are needed between Proton and URLs:
   carbonate advertises UID-based names, but remembers what a client called
   something it PUT, or a later GET or DELETE at that path cannot find the event.
 
-Reads are cached for 30 seconds, and the cache is dropped whenever we write.
-That is a placeholder for driving it from Proton's event loop.
+Reads are cached until Proton says the calendar has changed. The calendar
+event loop's latest ID serves as both the CalDAV ctag and the cache's version:
+one cheap request per poll decides whether to decrypt anything at all, so a
+client polling every few seconds costs almost nothing while a change made
+elsewhere appears on the next poll rather than after a timer.
+
+The cache is also dropped on our own writes, because Proton records a change in
+its event loop a moment after accepting it — straight after a write the token
+still reads as it did before.
+
+Contacts have no such token, so they are cached until carbonate writes.
+
+The DAV backends take a `Store` interface rather than a Proton connection.
+The methods are the operations DAV performs, not a window onto the API, which
+keeps the fake in the tests small enough to be obviously right — and means the
+backends can be tested without an account.
 
 ### Making a client see a writable calendar
 

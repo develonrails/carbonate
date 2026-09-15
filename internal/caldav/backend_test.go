@@ -3,13 +3,12 @@ package caldav
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/emersion/go-ical"
 	"testing"
-	"time"
 
 	"github.com/develonrails/carbonate/internal/calendar"
-	"github.com/develonrails/carbonate/internal/proton"
 )
 
 func TestCalendarSegment(t *testing.T) {
@@ -56,7 +55,7 @@ func TestTokenIsURLSafe(t *testing.T) {
 }
 
 func newBackend() *Backend {
-	return New((*proton.Conn)(nil), time.Minute)
+	return New(newFake())
 }
 
 // A client may name a resource whatever it likes; the UID lives in the body.

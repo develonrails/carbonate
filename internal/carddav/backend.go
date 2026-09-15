@@ -12,7 +12,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/emersion/go-vcard"
 	"github.com/emersion/go-webdav"
@@ -20,7 +19,6 @@ import (
 
 	"github.com/develonrails/carbonate/internal/cache"
 	"github.com/develonrails/carbonate/internal/contacts"
-	"github.com/develonrails/carbonate/internal/proton"
 )
 
 // Paths served. go-webdav derives a resource's kind from path depth, so the
@@ -36,8 +34,8 @@ const (
 
 // Backend serves one Proton account's contacts.
 type Backend struct {
-	conn  *proton.Conn
-	cache *cache.Events[contacts.Contact]
+	store Store
+	cache *cache.Entries[contacts.Contact]
 
 	// names maps a client-chosen resource path to the UID stored there.
 	// CardDAV lets the client name the resource, and Proton knows only the UID.
@@ -45,10 +43,10 @@ type Backend struct {
 	names map[string]string
 }
 
-func New(conn *proton.Conn, ttl time.Duration) *Backend {
+func New(store Store) *Backend {
 	return &Backend{
-		conn:  conn,
-		cache: cache.New[contacts.Contact](ttl),
+		store: store,
+		cache: cache.New[contacts.Contact](),
 		names: make(map[string]string),
 	}
 }
@@ -97,11 +95,20 @@ func (b *Backend) DeleteAddressBook(ctx context.Context, p string) error {
 	return webdav.NewHTTPError(http.StatusForbidden, fmt.Errorf("Proton's address book cannot be deleted"))
 }
 
+// list returns the account's contacts.
+//
+// Proton has no change token for contacts, so this caches only within a
+// single request burst: the token is fixed, and the entry is dropped whenever
+// carbonate writes.
 func (b *Backend) list(ctx context.Context) ([]contacts.Contact, error) {
-	return b.cache.Get(ctx, "contacts", func(ctx context.Context) ([]contacts.Contact, error) {
-		return contacts.List(ctx, b.conn)
+	return b.cache.Get(ctx, "contacts", contactsToken, func(ctx context.Context) ([]contacts.Contact, error) {
+		return b.store.Contacts(ctx)
 	})
 }
+
+// contactsToken stands in for a change token Proton does not offer. The cache
+// therefore holds contacts until a write drops them.
+const contactsToken = "contacts"
 
 func objectPath(uid string) string {
 	return bookPath + url.PathEscape(uid) + ".vcf"
@@ -214,7 +221,7 @@ func (b *Backend) PutAddressObject(ctx context.Context, p string, card vcard.Car
 		return nil, webdav.NewHTTPError(http.StatusBadRequest, fmt.Errorf("contact has no UID"))
 	}
 
-	if _, _, err := contacts.Put(ctx, b.conn, card); err != nil {
+	if _, _, err := b.store.Put(ctx, card); err != nil {
 		return nil, err
 	}
 
@@ -233,7 +240,7 @@ func (b *Backend) DeleteAddressObject(ctx context.Context, p string) error {
 		return err
 	}
 
-	deleted, err := contacts.Delete(ctx, b.conn, uid)
+	deleted, err := b.store.Delete(ctx, uid)
 	if err != nil {
 		return err
 	}

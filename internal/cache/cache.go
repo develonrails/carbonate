@@ -1,43 +1,45 @@
-// Package cache keeps decrypted calendar events in memory.
+// Package cache keeps decrypted data in memory until the source says it has
+// changed.
 //
-// A CalDAV client polls: Evolution asks for the whole calendar every time it
-// syncs. Fetching and decrypting thousands of events on each poll would make
-// the bridge unusable, so results are held for a short while and dropped as
-// soon as we change something ourselves.
+// A DAV client polls: it asks for the whole collection every time it syncs.
+// Fetching and decrypting thousands of events on each poll would make the
+// bridge unusable, and a timer would either serve stale data or throw away
+// good data on a schedule unrelated to anything. Proton reports a token that
+// moves when a calendar moves, so that is what decides.
 package cache
 
 import (
 	"context"
 	"sync"
-	"time"
 )
 
-// Events caches per-calendar event lists.
-type Events[T any] struct {
+// Entries caches items by key, keyed also on a token describing their version.
+type Entries[T any] struct {
 	mu      sync.Mutex
-	ttl     time.Duration
-	now     func() time.Time
 	entries map[string]*entry[T]
 }
 
 type entry[T any] struct {
-	items    []T
-	fetched  time.Time
+	items []T
+	token string
+	valid bool
+
+	// inflight serialises fetches for one key, so a burst of requests from a
+	// polling client becomes a single call rather than several.
 	inflight sync.Mutex
 }
 
-// New returns a cache holding entries for ttl.
-func New[T any](ttl time.Duration) *Events[T] {
-	return &Events[T]{
-		ttl:     ttl,
-		now:     time.Now,
-		entries: make(map[string]*entry[T]),
-	}
+// New returns an empty cache.
+func New[T any]() *Entries[T] {
+	return &Entries[T]{entries: make(map[string]*entry[T])}
 }
 
-// Get returns the cached items for key, calling fetch when they are missing or
-// stale.
-func (c *Events[T]) Get(ctx context.Context, key string, fetch func(context.Context) ([]T, error)) ([]T, error) {
+// Get returns the cached items for key, calling fetch when the token differs
+// from the one they were fetched with.
+//
+// An empty token means "cannot tell", and always refetches: serving data that
+// might be stale is worse than fetching data that might be current.
+func (c *Entries[T]) Get(ctx context.Context, key, token string, fetch func(context.Context) ([]T, error)) ([]T, error) {
 	c.mu.Lock()
 	e, ok := c.entries[key]
 	if !ok {
@@ -46,13 +48,11 @@ func (c *Events[T]) Get(ctx context.Context, key string, fetch func(context.Cont
 	}
 	c.mu.Unlock()
 
-	// Hold the per-key lock across the fetch so a burst of concurrent
-	// requests results in one call to Proton rather than several.
 	e.inflight.Lock()
 	defer e.inflight.Unlock()
 
 	c.mu.Lock()
-	fresh := !e.fetched.IsZero() && c.now().Sub(e.fetched) < c.ttl
+	fresh := e.valid && token != "" && e.token == token
 	items := e.items
 	c.mu.Unlock()
 
@@ -66,19 +66,22 @@ func (c *Events[T]) Get(ctx context.Context, key string, fetch func(context.Cont
 	}
 
 	c.mu.Lock()
-	e.items, e.fetched = items, c.now()
+	e.items, e.token, e.valid = items, token, true
 	c.mu.Unlock()
 
 	return items, nil
 }
 
-// Invalidate drops the entry for key, so the next Get refetches. Call it after
-// any write: our own change is the one case where we know the cache is wrong.
-func (c *Events[T]) Invalidate(key string) {
+// Invalidate drops the entry for key.
+//
+// Proton records a change in its event loop a moment after accepting it, so
+// straight after a write the token still reads as it did before. Our own
+// write is the one case where we know better than the token.
+func (c *Entries[T]) Invalidate(key string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	if e, ok := c.entries[key]; ok {
-		e.fetched = time.Time{}
+		e.valid = false
 	}
 }

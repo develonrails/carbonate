@@ -16,7 +16,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/emersion/go-ical"
 	"github.com/emersion/go-webdav"
@@ -24,7 +23,6 @@ import (
 
 	"github.com/develonrails/carbonate/internal/cache"
 	"github.com/develonrails/carbonate/internal/calendar"
-	"github.com/develonrails/carbonate/internal/proton"
 )
 
 // Paths served.
@@ -41,8 +39,8 @@ const (
 
 // Backend serves one Proton account.
 type Backend struct {
-	conn  *proton.Conn
-	cache *cache.Events[calendar.Event]
+	store Store
+	cache *cache.Entries[calendar.Event]
 
 	// tokens maps a URL-safe path segment to a Proton calendar ID. Proton IDs
 	// are base64 with padding, which does not belong in a URL path.
@@ -56,11 +54,14 @@ type Backend struct {
 	names  map[string]string
 }
 
-// New returns a backend caching events for ttl.
-func New(conn *proton.Conn, ttl time.Duration) *Backend {
+// New returns a backend reading and writing through store.
+//
+// Cached events are kept until Proton says the calendar has changed, so a
+// change made elsewhere shows up on the next poll rather than after a timer.
+func New(store Store) *Backend {
 	return &Backend{
-		conn:   conn,
-		cache:  cache.New[calendar.Event](ttl),
+		store:  store,
+		cache:  cache.New[calendar.Event](),
 		tokens: make(map[string]string),
 		names:  make(map[string]string),
 	}
@@ -82,19 +83,16 @@ func (b *Backend) ctag(ctx context.Context, p string) (string, error) {
 		return "", err
 	}
 
-	var res struct {
-		CalendarModelEventID string
-	}
-
-	if err := b.conn.Get(ctx, "/calendar/v1/"+id+"/modelevents/latest", &res); err != nil {
+	token, err := b.store.ChangeToken(ctx, id)
+	if err != nil {
 		return "", err
 	}
 
-	if res.CalendarModelEventID == "" {
+	if token == "" {
 		return "", fmt.Errorf("calendar %s reported no change token", id)
 	}
 
-	return res.CalendarModelEventID, nil
+	return token, nil
 }
 
 func (b *Backend) CurrentUserPrincipal(ctx context.Context) (string, error) {
@@ -112,7 +110,7 @@ func token(id string) string {
 }
 
 func (b *Backend) ListCalendars(ctx context.Context) ([]caldav.Calendar, error) {
-	calendars, err := calendar.List(ctx, b.conn)
+	calendars, err := b.store.Calendars(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -248,9 +246,22 @@ func objectPath(calendarToken, uid string) string {
 	return homeSetPath + calendarToken + "/" + url.PathEscape(uid) + ".ics"
 }
 
+// events returns a calendar's events, refetching only when Proton's change
+// token says something has moved.
+//
+// A client polls constantly, and decrypting a calendar on every poll would
+// make the bridge unusable. Asking for the token is one cheap request, and it
+// is the same one the ctag is built from.
 func (b *Backend) events(ctx context.Context, calendarID string) ([]calendar.Event, error) {
-	return b.cache.Get(ctx, calendarID, func(ctx context.Context) ([]calendar.Event, error) {
-		return calendar.Events(ctx, b.conn, calendarID)
+	token, err := b.store.ChangeToken(ctx, calendarID)
+	if err != nil {
+		// Without a token there is no way to tell stale from current, so
+		// serve fresh data rather than risk serving old.
+		token = ""
+	}
+
+	return b.cache.Get(ctx, calendarID, token, func(ctx context.Context) ([]calendar.Event, error) {
+		return b.store.Events(ctx, calendarID)
 	})
 }
 
@@ -371,7 +382,7 @@ func (b *Backend) PutCalendarObject(ctx context.Context, p string, cal *ical.Cal
 		return nil, webdav.NewHTTPError(http.StatusBadRequest, fmt.Errorf("event has no UID"))
 	}
 
-	if _, _, err := calendar.Put(ctx, b.conn, id, buf.String()); err != nil {
+	if _, _, err := b.store.Put(ctx, id, buf.String()); err != nil {
 		return nil, err
 	}
 
@@ -423,7 +434,7 @@ func (b *Backend) DeleteCalendarObject(ctx context.Context, p string) error {
 		return err
 	}
 
-	deleted, err := calendar.Delete(ctx, b.conn, id, uid)
+	deleted, err := b.store.Delete(ctx, id, uid)
 	if err != nil {
 		return err
 	}

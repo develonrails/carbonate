@@ -8,11 +8,10 @@ import (
 	"github.com/emersion/go-webdav/carddav"
 
 	"github.com/develonrails/carbonate/internal/contacts"
-	"github.com/develonrails/carbonate/internal/proton"
 )
 
 func newBackend() *Backend {
-	return New((*proton.Conn)(nil), time.Minute)
+	return New(newFakeContacts())
 }
 
 func TestObjectUIDUsesRememberedName(t *testing.T) {

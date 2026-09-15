@@ -15,18 +15,13 @@ import (
 	"github.com/develonrails/carbonate/internal/proton"
 )
 
-// CacheTTL is how long a fetched calendar is reused. Long enough that a
-// client polling every few seconds does not hammer Proton, short enough that
-// a change made in the Proton web app shows up while you wait.
-const CacheTTL = 30 * time.Second
-
 // Serve runs the CalDAV and CardDAV server until the context is cancelled.
 //
 // It is shared by the command line and the GUI so that both expose exactly
 // the same server rather than two that drift apart.
 func Serve(ctx context.Context, conn *proton.Conn, addr, username, password string, out io.Writer) error {
-	calendars := caldav.New(conn, CacheTTL)
-	addressBook := carddav.New(conn, CacheTTL)
+	calendars := caldav.New(caldav.NewStore(conn))
+	addressBook := carddav.New(carddav.NewStore(conn))
 
 	mux := http.NewServeMux()
 	mux.Handle("/caldav/", calendars.Handler())

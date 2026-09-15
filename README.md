@@ -33,7 +33,8 @@ expires. Those two gaps are carbonate's reason to exist.
 ```
 CalDAV/CardDAV client  →  go-webdav backend  →  local cache (decrypted)
                                                       ↑
-                                        dropped on write, else 30s
+                                     refetch only when Proton's
+                                       change token has moved
                                                       ↓
                                         go-proton-api  →  Proton API
 ```
@@ -185,9 +186,7 @@ Open, each with its reasoning in the issue:
 | [#1](https://github.com/develonrails/carbonate/issues/1) | Recurrence exceptions are probably mishandled |
 | [#2](https://github.com/develonrails/carbonate/issues/2) | Invitations are never sent to attendees |
 | [#4](https://github.com/develonrails/carbonate/issues/4) | Human verification (CAPTCHA) at login is not handled |
-| [#5](https://github.com/develonrails/carbonate/issues/5) | Cache is a 30-second timer rather than event-driven |
 | [#7](https://github.com/develonrails/carbonate/issues/7) | `sync-collection` REPORT is not supported |
-| [#8](https://github.com/develonrails/carbonate/issues/8) | DAV backends cannot be tested without a live account |
 
 One is worth knowing before you rely on carbonate: an attendee is recorded but
 never told they were invited ([#2](https://github.com/develonrails/carbonate/issues/2)).
