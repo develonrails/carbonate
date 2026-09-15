@@ -64,6 +64,11 @@ make build      # or: go build ./cmd/carbonate
 
 ## Usage
 
+There is also a small GTK window, `carbonate-gui`, for logging in and starting
+the server without keeping a terminal open. It runs the same server from the
+same package, so the two cannot drift apart. See
+[Building the GUI](#building-the-gui).
+
 ```sh
 carbonate auth <username>   # log in to Proton, store an encrypted session
 carbonate calendars         # list calendars; --events to show them, --ics for raw iCalendar
@@ -122,6 +127,27 @@ rather than to protect the wire.
 Set `CARBONATE_BRIDGE_PASSWORD` to run unattended, and `CARBONATE_DEBUG=1` to
 dump every request and response when the API misbehaves — it prints access
 tokens, so leave it off otherwise.
+
+## Building the GUI
+
+The window is behind the `gtk` build tag, so the daemon, the tests and CI need
+no C toolchain at all.
+
+```sh
+make gui
+```
+
+It needs `gtk4` and `gobject-introspection` development headers. On an
+immutable host such as Fedora Silverblue there are none, and no C compiler
+either; build it in a container instead:
+
+```sh
+toolbox create carbonate-build
+toolbox run -c carbonate-build sudo dnf install -y gcc glibc-devel gtk4-devel gobject-introspection-devel golang
+toolbox run -c carbonate-build make gui
+```
+
+The result links against the host's own GTK, so it runs outside the container.
 
 ## Testing
 

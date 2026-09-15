@@ -15,6 +15,7 @@ import (
 	"syscall"
 
 	"github.com/develonrails/carbonate/internal/proton"
+	"github.com/develonrails/carbonate/internal/server"
 	"github.com/develonrails/carbonate/internal/session"
 )
 
@@ -233,7 +234,7 @@ func cmdServe(ctx context.Context, args []string, out io.Writer) error {
 
 	fmt.Fprintf(out, "Connected as %s.\n", user.Email)
 
-	return serveDAV(ctx, conn, *addr, user.Email, bridgePassword, out)
+	return server.Serve(ctx, conn, *addr, user.Email, bridgePassword, out)
 }
 
 func resolvePath(override string) (string, error) {

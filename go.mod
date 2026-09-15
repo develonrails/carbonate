@@ -26,6 +26,7 @@ require (
 	github.com/cloudflare/circl v1.6.2 // indirect
 	github.com/cloudwego/base64x v0.1.6 // indirect
 	github.com/cronokirby/saferith v0.33.0 // indirect
+	github.com/diamondburned/gotk4/pkg v0.4.1 // indirect
 	github.com/emersion/go-ical v0.0.0-20250609112844-439c63cef608 // indirect
 	github.com/emersion/go-message v0.16.0 // indirect
 	github.com/emersion/go-textwrapper v0.0.0-20200911093747-65d896831594 // indirect

@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"context"
@@ -15,15 +15,18 @@ import (
 	"github.com/develonrails/carbonate/internal/proton"
 )
 
-// cacheTTL is how long a fetched calendar is reused. Long enough that a
+// CacheTTL is how long a fetched calendar is reused. Long enough that a
 // client polling every few seconds does not hammer Proton, short enough that
 // a change made in the Proton web app shows up while you wait.
-const cacheTTL = 30 * time.Second
+const CacheTTL = 30 * time.Second
 
-// serveDAV runs the CalDAV server until the context is cancelled.
-func serveDAV(ctx context.Context, conn *proton.Conn, addr, username, password string, out io.Writer) error {
-	calendars := caldav.New(conn, cacheTTL)
-	addressBook := carddav.New(conn, cacheTTL)
+// Serve runs the CalDAV and CardDAV server until the context is cancelled.
+//
+// It is shared by the command line and the GUI so that both expose exactly
+// the same server rather than two that drift apart.
+func Serve(ctx context.Context, conn *proton.Conn, addr, username, password string, out io.Writer) error {
+	calendars := caldav.New(conn, CacheTTL)
+	addressBook := carddav.New(conn, CacheTTL)
 
 	mux := http.NewServeMux()
 	mux.Handle("/caldav/", calendars.Handler())
@@ -32,9 +35,9 @@ func serveDAV(ctx context.Context, conn *proton.Conn, addr, username, password s
 	// Clients given only a hostname find their way from here.
 	mux.Handle("/.well-known/caldav", calendars.Handler())
 	mux.Handle("/.well-known/carddav", addressBook.Handler())
-	mux.HandleFunc("/", index)
+	mux.HandleFunc("/", Index)
 
-	guarded := authenticated(username, password, mux)
+	guarded := Authenticated(username, password, mux)
 
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -83,11 +86,11 @@ address book setup it reads instead.
 // The listener is on loopback and unencrypted, so this is not protecting the
 // wire — it stops other local processes, and anything a browser can be tricked
 // into sending, from reaching your calendar.
-func authenticated(username, password string, next http.Handler) http.Handler {
+func Authenticated(username, password string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user, pass, ok := r.BasicAuth()
 
-		if !ok || !equal(user, username) || !equal(pass, password) {
+		if !ok || !Equal(user, username) || !Equal(pass, password) {
 			w.Header().Set("WWW-Authenticate", `Basic realm="carbonate", charset="UTF-8"`)
 			http.Error(w, "unauthorised", http.StatusUnauthorized)
 
@@ -100,12 +103,12 @@ func authenticated(username, password string, next http.Handler) http.Handler {
 
 // equal compares in constant time, so a wrong password cannot be found one
 // character at a time.
-func equal(a, b string) bool {
+func Equal(a, b string) bool {
 	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
 
 // index points a browser, or a curious client, at the two collections.
-func index(w http.ResponseWriter, r *http.Request) {
+func Index(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
 		http.NotFound(w, r)
 

@@ -9,3 +9,4 @@ auth.json
 calcache-*.json
 /state/
 /coverage.out
+/carbonate-gui

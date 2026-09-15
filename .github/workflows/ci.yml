@@ -31,3 +31,22 @@ jobs:
 
       - name: Build
         run: go build ./cmd/carbonate
+
+  gui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # The window is optional, but it should not be allowed to rot.
+      - name: Install GTK
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-4-dev libgirepository1.0-dev
+
+      - name: Build the GUI
+        run: CGO_ENABLED=1 go build -tags gtk ./cmd/carbonate-gui
