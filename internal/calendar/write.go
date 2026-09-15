@@ -58,8 +58,13 @@ type eventData struct {
 	CalendarEventContent  []card     `json:",omitempty"`
 	AttendeesEventContent []card     `json:",omitempty"`
 	Attendees             []attendee `json:",omitempty"`
-	Permissions           int        `json:",omitempty"`
-	IsOrganizer           int        `json:",omitempty"`
+
+	// Notifications is always sent, never omitted: on an update, leaving it
+	// out would keep whatever reminders were there before, so removing the
+	// last alarm would silently fail.
+	Notifications []notification `json:"Notifications"`
+	Permissions   int            `json:",omitempty"`
+	IsOrganizer   int            `json:",omitempty"`
 }
 
 // attendee is the part of an invitation Proton keeps in the clear, so that it
@@ -242,7 +247,7 @@ func sync(ctx context.Context, conn *proton.Conn, calendarID, memberID string, e
 
 // findByUID locates an event by its iCalendar UID, returning nil when the
 // calendar has no such event.
-func findByUID(ctx context.Context, conn *proton.Conn, calendarID, uid string) (*api.CalendarEvent, error) {
+func findByUID(ctx context.Context, conn *proton.Conn, calendarID, uid string) (*rawEvent, error) {
 	events, err := fetchAll(ctx, conn, calendarID)
 	if err != nil {
 		return nil, err
@@ -275,7 +280,7 @@ func parseEvent(ics string) (*ical.Event, error) {
 	}
 }
 
-func buildEvent(event *ical.Event, keys *proton.CalendarKeys, existing *api.CalendarEvent) (*eventData, error) {
+func buildEvent(event *ical.Event, keys *proton.CalendarKeys, existing *rawEvent) (*eventData, error) {
 	if err := normaliseSequence(event, existing); err != nil {
 		return nil, err
 	}
@@ -321,6 +326,7 @@ func buildEvent(event *ical.Event, keys *proton.CalendarKeys, existing *api.Cale
 
 	data.AttendeesEventContent = attendees
 	data.Attendees = clear
+	data.Notifications = alarmsOf(event)
 
 	return data, nil
 }
@@ -607,7 +613,7 @@ func unknownProps(event *ical.Event, known []string) []string {
 // no changed event. Clients do not reliably bump it, so carbonate must. And
 // the value has to be bare, because "SEQUENCE;VALUE=TEXT:1", which go-ical's
 // SetText produces, earns a 500.
-func normaliseSequence(event *ical.Event, existing *api.CalendarEvent) error {
+func normaliseSequence(event *ical.Event, existing *rawEvent) error {
 	next := 0
 
 	if p := event.Props.Get("SEQUENCE"); p != nil {
@@ -636,7 +642,7 @@ func normaliseSequence(event *ical.Event, existing *api.CalendarEvent) error {
 //
 // Proton keeps it in the signed shared card, which is cleartext, so this needs
 // no calendar key.
-func storedSequence(existing *api.CalendarEvent) (int, error) {
+func storedSequence(existing *rawEvent) (int, error) {
 	for _, part := range existing.SharedEvents {
 		if part.Type&api.CalendarEventTypeEncrypted != 0 || part.Data == "" {
 			continue

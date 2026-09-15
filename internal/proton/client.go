@@ -14,6 +14,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -224,6 +225,33 @@ func (c *Conn) AddressKeyRing(addr api.Address) (*crypto.KeyRing, error) {
 	return kr, nil
 }
 
+// ErrSessionLostScope means Proton has demoted the session. It happens when a
+// client holds more sessions than Proton allows: rather than refusing the
+// newest, it strips scope from older ones, so the failure surfaces later on an
+// unrelated request and looks like a permissions problem.
+var ErrSessionLostScope = errors.New("this Proton session no longer has full access; log in again")
+
+// scopeCode is what Proton returns for a request the session may no longer make.
+const scopeCode = 9101
+
+// explainScope turns Proton's bare complaint about scope into something
+// actionable.
+func explainScope(err error) error {
+	if err == nil || !strings.Contains(err.Error(), strconv.Itoa(scopeCode)) {
+		return err
+	}
+
+	return fmt.Errorf("%w (%v)", ErrSessionLostScope, err)
+}
+
+// RevokeSession ends a Proton session by its UID.
+//
+// Used to retire the session being replaced at login: Proton keeps a limited
+// number, and leaving them behind eventually costs the newest one its scope.
+func (c *Conn) RevokeSession(ctx context.Context, uid string) error {
+	return c.Client.AuthRevoke(ctx, uid)
+}
+
 // PrimaryAddressKeyRing unlocks the keys of the account's primary address.
 //
 // Contacts are encrypted to it rather than to a per-collection key, so this is
@@ -424,7 +452,25 @@ func mailboxPasswordFor(auth api.Auth, loginPassword []byte, p Prompter) ([]byte
 // PersistFunc is called whenever Proton hands out a new refresh token. The
 // old token is dead at that point, so failing to persist the new one locks
 // the user out until they log in again.
+//
+// A callback that does nothing is never correct, however short-lived the
+// connection: the rotation has already happened by the time it is called.
+// Use Track for the common case.
 type PersistFunc func(uid, refreshToken string) error
+
+// Track returns a PersistFunc that writes rotated tokens back into s.
+//
+// The caller is responsible for saving s afterwards. This exists because a
+// hand-written callback that forgets to do this leaves the stored session
+// holding a token Proton has already discarded, and the account only appears
+// broken later.
+func Track(s *session.Session) PersistFunc {
+	return func(uid, refreshToken string) error {
+		s.UID, s.RefreshToken = uid, refreshToken
+
+		return nil
+	}
+}
 
 // Resume restores a stored session and unlocks the user's keys. persist is
 // called immediately with the rotated token and again on every later refresh.
@@ -493,7 +539,7 @@ func Resume(ctx context.Context, s *session.Session, persist PersistFunc) (*Conn
 func unlock(ctx context.Context, c *api.Client, user api.User, mailboxPassword []byte) (*crypto.KeyRing, []byte, error) {
 	salts, err := c.GetSalts(ctx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("fetching key salts: %w", err)
+		return nil, nil, fmt.Errorf("fetching key salts: %w", explainScope(err))
 	}
 
 	saltedPassword, err := salts.SaltForKey(mailboxPassword, user.Keys.Primary().ID)

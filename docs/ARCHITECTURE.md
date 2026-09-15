@@ -311,8 +311,22 @@ Two rules that are not obvious from the table:
   sent as an empty encrypted blob. This is why our live test event came back
   with no `AttendeesEvents` and a null `CalendarKeyPacket`.
 
-VALARM does not go into an ICS part at all; alarms travel as a separate
-`Notifications` JSON field on the event.
+### Reminders
+
+VALARM does not go into an ICS part at all. Alarms travel as a separate
+`Notifications` field on the event, beside the encrypted cards, as
+`{Type, Trigger}` — where `Type` is 0 for email and 1 for the device, and
+`Trigger` is the iCalendar value verbatim, such as `-PT15M`. Proton knows only
+those two kinds, so an AUDIO alarm becomes a device notification.
+
+`Notifications` is **always sent, never omitted**. Leaving it out of an update
+keeps whatever was there before, so removing the last reminder would appear to
+work and change nothing.
+
+Reading them back needs a field go-proton-api does not decode, so
+`internal/calendar` fetches events itself and embeds go-proton-api's struct
+rather than replacing it: the embedded fields still handle the parts and the
+crypto, and `encoding/json` fills both from one response.
 
 ### Attendees
 

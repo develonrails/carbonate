@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	api "github.com/ProtonMail/go-proton-api"
+
+	"github.com/develonrails/carbonate/internal/session"
 )
 
 // recordingPrompter answers prompts and remembers what it was asked, so a
@@ -85,3 +87,47 @@ type failingPrompter struct{ err error }
 
 func (p failingPrompter) Password(string) ([]byte, error) { return nil, p.err }
 func (p failingPrompter) Line(string) (string, error)     { return "", p.err }
+
+// Proton answers a request the session may no longer make with a bare
+// complaint about scope, which reads as a permissions fault. It is really an
+// accounting one: too many sessions were left behind.
+func TestExplainScopeNamesTheRealCause(t *testing.T) {
+	err := explainScope(errors.New("403 GET /core/v4/keys/salts: Access token does not have sufficient scope (Code=9101, Status=403)"))
+
+	if !errors.Is(err, ErrSessionLostScope) {
+		t.Errorf("error = %v, want it to wrap ErrSessionLostScope", err)
+	}
+
+	if !strings.Contains(err.Error(), "log in again") {
+		t.Errorf("error %q does not say what to do about it", err)
+	}
+}
+
+// Every other failure must pass through untouched, or a real permissions
+// problem would be reported as a session that needs renewing.
+func TestExplainScopeLeavesOtherErrorsAlone(t *testing.T) {
+	original := errors.New("422 POST /calendar/v1: Invalid event data (Code=2000)")
+
+	if got := explainScope(original); got != original {
+		t.Errorf("an unrelated error was rewritten: %v", got)
+	}
+
+	if explainScope(nil) != nil {
+		t.Error("nil was turned into an error")
+	}
+}
+
+// Resuming a session rotates its refresh token and discards the old one, so a
+// callback that does nothing leaves whatever is saved afterwards holding a
+// token Proton has already thrown away.
+func TestTrackWritesRotatedTokensBack(t *testing.T) {
+	s := &session.Session{UID: "old-uid", RefreshToken: "old-token"}
+
+	if err := Track(s)("new-uid", "new-token"); err != nil {
+		t.Fatalf("Track: %v", err)
+	}
+
+	if s.UID != "new-uid" || s.RefreshToken != "new-token" {
+		t.Errorf("session = %+v, want the rotated values", s)
+	}
+}

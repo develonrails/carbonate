@@ -173,6 +173,7 @@ Done:
 - [x] Unattended login via `--password-stdin`
 - [x] Calendar: decrypt, reassemble, create, update, delete
 - [x] Attendees: tokens, encrypted attendee part, RSVP status
+- [x] Reminders, in both directions
 - [x] Contacts: decrypt, split, create, update, delete
 - [x] Serve both over CalDAV and CardDAV, with `getctag`
 
@@ -188,12 +189,10 @@ Open, each with its reasoning in the issue:
 | [#6](https://github.com/develonrails/carbonate/issues/6) | Listing contacts costs one request per contact |
 | [#7](https://github.com/develonrails/carbonate/issues/7) | `sync-collection` REPORT is not supported |
 | [#8](https://github.com/develonrails/carbonate/issues/8) | DAV backends cannot be tested without a live account |
-| [#9](https://github.com/develonrails/carbonate/issues/9) | VALARM reminders are dropped |
 | [#10](https://github.com/develonrails/carbonate/issues/10) | The app version reported to Proton is a guess |
 
-Two of these are worth knowing before you rely on carbonate: a reminder set in
-your client is silently discarded (#9), and an attendee is recorded but never
-told they were invited (#2).
+One is worth knowing before you rely on carbonate: an attendee is recorded but
+never told they were invited ([#2](https://github.com/develonrails/carbonate/issues/2)).
 
 ## Scope
 

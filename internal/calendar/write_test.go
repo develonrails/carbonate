@@ -174,12 +174,12 @@ func TestNormaliseSequencePreservesExistingValue(t *testing.T) {
 // Proton silently discards an update whose SEQUENCE does not increase, so a
 // client that never bumps it would see its edits vanish without an error.
 func TestNormaliseSequenceOutrunsStoredValue(t *testing.T) {
-	stored := &api.CalendarEvent{
+	stored := &rawEvent{CalendarEvent: api.CalendarEvent{
 		SharedEvents: []api.CalendarEventPart{{
 			Type: api.CalendarEventTypeSigned,
 			Data: "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:test@carbonate.local\r\nSEQUENCE:4\r\nEND:VEVENT\r\nEND:VCALENDAR",
 		}},
-	}
+	}}
 
 	// The client sends SEQUENCE:0, as many do on every edit.
 	event := parse(t, fullEvent)
@@ -195,12 +195,12 @@ func TestNormaliseSequenceOutrunsStoredValue(t *testing.T) {
 
 // A client that does bump it properly must not be dragged backwards.
 func TestNormaliseSequenceKeepsHigherClientValue(t *testing.T) {
-	stored := &api.CalendarEvent{
+	stored := &rawEvent{CalendarEvent: api.CalendarEvent{
 		SharedEvents: []api.CalendarEventPart{{
 			Type: api.CalendarEventTypeSigned,
 			Data: "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nSEQUENCE:2\r\nEND:VEVENT\r\nEND:VCALENDAR",
 		}},
-	}
+	}}
 
 	event := parse(t, strings.Replace(fullEvent, "UID:test@carbonate.local", "UID:test@carbonate.local\nSEQUENCE:9", 1))
 
@@ -214,7 +214,7 @@ func TestNormaliseSequenceKeepsHigherClientValue(t *testing.T) {
 }
 
 func TestStoredSequenceDefaultsToZero(t *testing.T) {
-	n, err := storedSequence(&api.CalendarEvent{})
+	n, err := storedSequence(&rawEvent{})
 	if err != nil {
 		t.Fatalf("storedSequence: %v", err)
 	}

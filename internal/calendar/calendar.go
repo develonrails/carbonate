@@ -37,6 +37,21 @@ type Event struct {
 	// Properties are the decrypted iCalendar lines gathered from every part,
 	// in the order Proton stores them.
 	Properties []string
+
+	// Alarms are the reminders Proton keeps outside the encrypted parts.
+	Alarms []notification
+}
+
+// rawEvent is an event as Proton actually sends it.
+//
+// go-proton-api's struct is embedded rather than replaced: it decodes the
+// parts and key packets correctly, and its CalendarEventPart.Decode does the
+// crypto. What it lacks is Notifications, and encoding/json flattens the
+// embedded struct so both come from one response.
+type rawEvent struct {
+	api.CalendarEvent
+
+	Notifications []notification
 }
 
 // multiValued lists iCalendar properties that may legitimately appear more
@@ -99,6 +114,11 @@ func (e Event) ICS() string {
 		"BEGIN:VEVENT",
 	}
 	out = append(out, body...)
+
+	// Reminders live outside the encrypted parts, so they are put back here
+	// rather than arriving with the rest of the properties.
+	out = append(out, alarmLines(e.Alarms, e.Summary())...)
+
 	out = append(out, "END:VEVENT", "END:VCALENDAR")
 
 	return strings.Join(out, "\r\n") + "\r\n"
@@ -157,18 +177,23 @@ func Events(ctx context.Context, conn *proton.Conn, calendarID string) ([]Event,
 // GetAllCalendarEvents unusable, so carbonate pages by hand.
 const pageSize = 100
 
-func fetchAll(ctx context.Context, conn *proton.Conn, calendarID string) ([]api.CalendarEvent, error) {
-	var all []api.CalendarEvent
+func fetchAll(ctx context.Context, conn *proton.Conn, calendarID string) ([]rawEvent, error) {
+	var all []rawEvent
 
 	for page := 0; ; page++ {
-		batch, err := conn.Client.GetCalendarEvents(ctx, calendarID, page, pageSize, nil)
-		if err != nil {
+		var res struct {
+			Events []rawEvent
+		}
+
+		path := fmt.Sprintf("/calendar/v1/%s/events?Page=%d&PageSize=%d", calendarID, page, pageSize)
+
+		if err := conn.Get(ctx, path, &res); err != nil {
 			return nil, fmt.Errorf("fetching events: %w", err)
 		}
 
-		all = append(all, batch...)
+		all = append(all, res.Events...)
 
-		if len(batch) < pageSize {
+		if len(res.Events) < pageSize {
 			return all, nil
 		}
 	}
@@ -233,8 +258,9 @@ func List(ctx context.Context, conn *proton.Conn) ([]Calendar, error) {
 	return out, nil
 }
 
-func decode(raw api.CalendarEvent, calKR, addrKR *crypto.KeyRing) (Event, error) {
+func decode(raw rawEvent, calKR, addrKR *crypto.KeyRing) (Event, error) {
 	event := Event{
+		Alarms:    raw.Notifications,
 		ID:        raw.ID,
 		UID:       raw.UID,
 		Start:     time.Unix(raw.StartTime, 0),

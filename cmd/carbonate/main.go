@@ -142,6 +142,10 @@ func cmdAuth(ctx context.Context, args []string, out io.Writer) error {
 		return err
 	}
 
+	// Retire the session being replaced. Proton allows only so many, and an
+	// abandoned one eventually costs a later session its scope.
+	retireOldSession(ctx, sessionPath, bridgePassword, sess, out)
+
 	if err := session.Save(sessionPath, bridgePassword, sess); err != nil {
 		return err
 	}
@@ -168,6 +172,33 @@ then reject. Pass -keep-bridge-password to keep this one.
 `, sess.Username, sessionPath, bridgePassword)
 
 	return nil
+}
+
+// retireOldSession revokes the session this login replaces, when it can be
+// read. Failing to is not worth stopping a successful login over, so it is
+// reported and passed by.
+func retireOldSession(ctx context.Context, path, bridgePassword string, fresh *session.Session, out io.Writer) {
+	old, err := session.Load(path, bridgePassword)
+	if err != nil {
+		// A new bridge password, or no session at all: nothing we can open.
+		return
+	}
+
+	if old.UID == "" || old.UID == fresh.UID {
+		return
+	}
+
+	// Resuming rotates the refresh token, so the rotation has to land in the
+	// session about to be saved.
+	conn, err := proton.Resume(ctx, fresh, proton.Track(fresh))
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+
+	if err := conn.RevokeSession(ctx, old.UID); err != nil {
+		fmt.Fprintf(out, "Note: the previous Proton session could not be retired (%v).\n", err)
+	}
 }
 
 // bridgePasswordForAuth returns the password to encrypt the new session with,

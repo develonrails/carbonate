@@ -100,7 +100,7 @@ func TestDecodeReassemblesTheParts(t *testing.T) {
 
 	encrypted, keyPacket := encryptPart(t, calKR, addrKR, secret)
 
-	raw := api.CalendarEvent{
+	raw := rawEvent{CalendarEvent: api.CalendarEvent{
 		ID:              "event-id",
 		UID:             "abc",
 		StartTime:       1790000000,
@@ -108,7 +108,7 @@ func TestDecodeReassemblesTheParts(t *testing.T) {
 		LastEditTime:    1789000000,
 		SharedKeyPacket: keyPacket,
 		SharedEvents:    []api.CalendarEventPart{signedPart(t, addrKR, shared), encrypted},
-	}
+	}}
 
 	event, err := decode(raw, calKR, addrKR)
 	if err != nil {
@@ -141,11 +141,11 @@ func TestDecodeRejectsABadSignature(t *testing.T) {
 
 	body := "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:abc\r\nEND:VEVENT\r\nEND:VCALENDAR"
 
-	raw := api.CalendarEvent{
+	raw := rawEvent{CalendarEvent: api.CalendarEvent{
 		ID:           "event-id",
 		UID:          "abc",
 		SharedEvents: []api.CalendarEventPart{signedPart(t, otherKR, body)},
-	}
+	}}
 
 	if _, err := decode(raw, calKR, addrKR); err == nil {
 		t.Error("an event signed by the wrong key was accepted")
@@ -161,12 +161,12 @@ func TestDecodeRejectsTheWrongCalendarKey(t *testing.T) {
 	body := "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:abc\r\nSUMMARY:x\r\nEND:VEVENT\r\nEND:VCALENDAR"
 	encrypted, keyPacket := encryptPart(t, calKR, addrKR, body)
 
-	raw := api.CalendarEvent{
+	raw := rawEvent{CalendarEvent: api.CalendarEvent{
 		ID:              "event-id",
 		UID:             "abc",
 		SharedKeyPacket: keyPacket,
 		SharedEvents:    []api.CalendarEventPart{encrypted},
-	}
+	}}
 
 	if _, err := decode(raw, otherCalKR, addrKR); err == nil {
 		t.Error("an event was decoded with the wrong calendar key")
@@ -178,12 +178,12 @@ func TestDecodeRejectsTheWrongCalendarKey(t *testing.T) {
 func TestDecodeCarriesTheFullDayFlag(t *testing.T) {
 	calKR, addrKR := keys(t)
 
-	raw := api.CalendarEvent{
+	raw := rawEvent{CalendarEvent: api.CalendarEvent{
 		ID:        "event-id",
 		UID:       "abc",
 		FullDay:   true,
 		StartTime: 1789430400,
-	}
+	}}
 
 	event, err := decode(raw, calKR, addrKR)
 	if err != nil {
@@ -202,11 +202,11 @@ func TestDecodeCarriesTheFullDayFlag(t *testing.T) {
 func TestDecodeCountsAttendees(t *testing.T) {
 	calKR, addrKR := keys(t)
 
-	raw := api.CalendarEvent{
+	raw := rawEvent{CalendarEvent: api.CalendarEvent{
 		ID:        "event-id",
 		UID:       "abc",
 		Attendees: []api.CalendarAttendee{{Token: "a"}, {Token: "b"}},
-	}
+	}}
 
 	event, err := decode(raw, calKR, addrKR)
 	if err != nil {
