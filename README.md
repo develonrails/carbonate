@@ -24,8 +24,8 @@ Two projects got there first, and carbonate stands on both:
   Casually maintained; archived on GitHub in August 2026 and moved to Codeberg.
 - [protoxide](https://github.com/mathewcsims/protoxide) — CalDAV, two-way sync.
 
-Neither does calendar *and* contacts in one daemon, and neither has reliable
-silent session refresh — today you re-authenticate by hand when your token
+Neither does calendar *and* contacts in one daemon, and neither refreshes its
+session silently — with both, you re-authenticate by hand when the token
 expires. Those two gaps are carbonate's reason to exist.
 
 ## Design
@@ -33,7 +33,7 @@ expires. Those two gaps are carbonate's reason to exist.
 ```
 CalDAV/CardDAV client  →  go-webdav backend  →  local cache (decrypted)
                                                       ↑
-                                         event-loop poller (~30s delta)
+                                        dropped on write, else 30s
                                                       ↓
                                         go-proton-api  →  Proton API
 ```
@@ -131,26 +131,34 @@ revocation are all exercised without a real account or network access.
 
 ## Roadmap
 
-- [x] SRP login and TOTP two-factor
-- [x] Two-password mode (separate mailbox password)
-- [x] Encrypted session at rest, rotated refresh tokens persisted
-- [x] Anonymous session handshake (Proton rejects logins without one)
+Done:
+
+- [x] SRP login, TOTP, two-password mode, anonymous session handshake
+- [x] Encrypted session at rest, with rotated refresh tokens persisted
 - [x] Unattended login via `--password-stdin`
-- [ ] Human-verification (CAPTCHA) challenge
-- [x] Calendar: fetch, decrypt and reassemble events into iCalendar
-- [x] Calendar: split, encrypt, sign and create events
-- [x] Calendar: update and delete events, with SEQUENCE handled correctly
-- [x] Serve calendars over CalDAV, read and write, from GNOME Calendar
-- [ ] Calendar: recurrence exceptions and attendees
-- [x] `getctag`, so a client can skip a sync entirely
-- [ ] `sync-collection`, for fetching only what changed
-- [ ] Event-loop driven cache instead of a short TTL
-- [x] Contacts: decrypt, split, and serve over CardDAV
+- [x] Calendar: decrypt, reassemble, create, update, delete
 - [x] Attendees: tokens, encrypted attendee part, RSVP status
-- [ ] Invitations by mail, so an attendee is told they were invited
-- [ ] Event-loop poller and delta sync, mapped to DAV ctag / sync-token
-- [ ] Write path: create, edit, delete round-tripping to Proton
-- [ ] Recurrence exceptions and attendees
+- [x] Contacts: decrypt, split, create, update, delete
+- [x] Serve both over CalDAV and CardDAV, with `getctag`
+
+Open, each with its reasoning in the issue:
+
+| | |
+|---|---|
+| [#1](https://github.com/develonrails/carbonate/issues/1) | Recurrence exceptions are probably mishandled |
+| [#2](https://github.com/develonrails/carbonate/issues/2) | Invitations are never sent to attendees |
+| [#3](https://github.com/develonrails/carbonate/issues/3) | A CLI command run while `serve` is running kills the session |
+| [#4](https://github.com/develonrails/carbonate/issues/4) | Human verification (CAPTCHA) at login is not handled |
+| [#5](https://github.com/develonrails/carbonate/issues/5) | Cache is a 30-second timer rather than event-driven |
+| [#6](https://github.com/develonrails/carbonate/issues/6) | Listing contacts costs one request per contact |
+| [#7](https://github.com/develonrails/carbonate/issues/7) | `sync-collection` REPORT is not supported |
+| [#8](https://github.com/develonrails/carbonate/issues/8) | DAV backends cannot be tested without a live account |
+| [#9](https://github.com/develonrails/carbonate/issues/9) | VALARM reminders are dropped |
+| [#10](https://github.com/develonrails/carbonate/issues/10) | The app version reported to Proton is a guess |
+
+Two of these are worth knowing before you rely on carbonate: a reminder set in
+your client is silently discarded (#9), and an attendee is recorded but never
+told they were invited (#2).
 
 ## Scope
 

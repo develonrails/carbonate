@@ -57,15 +57,22 @@ rescanning; we want that patch too.
 go-webdav derives a resource's kind from **path depth**, not from anything the
 backend says, so the URL layout is not a free choice:
 
-| Depth | Resource | Path |
+Both handlers also strip a configured `Prefix` before measuring, which is what
+lets CalDAV and CardDAV share one listener:
+
+| Depth | CalDAV | CardDAV |
 |---|---|---|
-| 1 | principal | `/principal/` |
-| 2 | calendar home set | `/principal/calendars/` |
-| 3 | calendar | `/principal/calendars/{token}/` |
-| 4 | event | `/principal/calendars/{token}/{uid}.ics` |
+| — | prefix `/caldav` | prefix `/carddav` |
+| 1 | `/caldav/principal/` | `/carddav/principal/` |
+| 2 | `/caldav/principal/calendars/` | `/carddav/principal/contacts/` |
+| 3 | `/caldav/principal/calendars/{token}/` | `/carddav/principal/contacts/default/` |
+| 4 | `…/{uid}.ics` | `…/{uid}.vcf` |
 
 Putting the principal at `/` looks tidier and quietly breaks discovery: the
 root is its own resource type and serves only `current-user-principal`.
+
+Proton has a single, unnamed collection of contacts, so the CardDAV address
+book is a fixed one that carbonate neither creates nor deletes.
 
 Two mappings are needed between Proton and URLs:
 
@@ -126,7 +133,11 @@ mean a second client learns of it a moment later.
 - `internal/cache` — decrypted events and contacts on disk, keyed by a URL-safe
   path token so DAV requests resolve to Proton IDs in O(1). Files are 0600.
 - `internal/calendar` — reading, decrypting, splitting and writing events.
-- `internal/caldav` — go-webdav backend mapping CalDAV onto the above.
+- `internal/contacts` — the same for contacts, which need far less work: Proton
+  stores them as vCards already and go-proton-api merges the cards on read.
+- `internal/caldav` — go-webdav backend mapping CalDAV onto `internal/calendar`,
+  plus `compat.go`, which corrects go-webdav's responses.
+- `internal/carddav` — the same for CardDAV over `internal/contacts`.
 
 ## Verified against a live account
 
