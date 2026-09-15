@@ -131,3 +131,30 @@ func TestTrackWritesRotatedTokensBack(t *testing.T) {
 		t.Errorf("session = %+v, want the rotated values", s)
 	}
 }
+
+// The version carbonate reports is a guess that Proton happens to accept.
+// When it stops, the message must name the knob rather than leave someone
+// guessing at a login failure.
+func TestExplainVersionNamesTheEnvironmentVariable(t *testing.T) {
+	err := explainVersion(errors.New("400 POST /auth/v4/info: This version of the app is no longer supported (Code=5003)"))
+
+	if !errors.Is(err, ErrAppVersionRejected) {
+		t.Errorf("error = %v, want it to wrap ErrAppVersionRejected", err)
+	}
+
+	if !strings.Contains(err.Error(), "CARBONATE_APP_VERSION") {
+		t.Errorf("error %q does not name the variable to set", err)
+	}
+}
+
+func TestExplainVersionLeavesOtherErrorsAlone(t *testing.T) {
+	original := errors.New("401 POST /auth/v4: Incorrect login credentials (Code=8002)")
+
+	if got := explainVersion(original); got != original {
+		t.Errorf("an unrelated error was rewritten: %v", got)
+	}
+
+	if explainVersion(nil) != nil {
+		t.Error("nil was turned into an error")
+	}
+}

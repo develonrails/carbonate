@@ -51,22 +51,27 @@ func List(ctx context.Context, conn *proton.Conn) ([]Contact, error) {
 		return nil, err
 	}
 
-	// The list endpoint returns metadata only — no cards — so each contact
-	// has to be fetched individually. That is one request per contact, which
-	// is why reads are cached.
+	// Two requests rather than one per contact: the listing carries the
+	// metadata but no cards, and the export carries the cards but not when
+	// each was last changed — which the ETag depends on.
 	index, err := conn.Client.GetAllContacts(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("fetching contacts: %w", err)
 	}
 
-	out := make([]Contact, 0, len(index))
-
+	modified := make(map[string]int64, len(index))
 	for _, meta := range index {
-		r, err := conn.Client.GetContact(ctx, meta.ID)
-		if err != nil {
-			return nil, fmt.Errorf("fetching contact %s: %w", meta.ID, err)
-		}
+		modified[meta.ID] = meta.ModifyTime
+	}
 
+	exported, err := exportAll(ctx, conn)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]Contact, 0, len(exported))
+
+	for _, r := range exported {
 		card, err := r.Cards.Merge(kr)
 		if err != nil {
 			return nil, fmt.Errorf("decrypting contact %s: %w", r.ID, err)
@@ -74,13 +79,49 @@ func List(ctx context.Context, conn *proton.Conn) ([]Contact, error) {
 
 		out = append(out, Contact{
 			ID:       r.ID,
-			UID:      uidOf(card, r),
-			Modified: time.Unix(r.ModifyTime, 0),
+			UID:      uidOf(card, api.Contact{ContactMetadata: api.ContactMetadata{ID: r.ID}}),
+			Modified: time.Unix(modified[r.ID], 0),
 			Card:     card,
 		})
 	}
 
 	return out, nil
+}
+
+// exportedContact is a contact as the export endpoint returns it: the cards,
+// decryptable, without the metadata the listing carries.
+type exportedContact struct {
+	ID    string
+	Cards api.Cards
+}
+
+// exportPageSize is what Proton's own web client asks for.
+const exportPageSize = 50
+
+// exportAll fetches every contact's cards, a page at a time.
+//
+// go-proton-api has no call for this, and its per-contact endpoint would mean
+// a request each — fine for a handful, ruinous for an address book.
+func exportAll(ctx context.Context, conn *proton.Conn) ([]exportedContact, error) {
+	var all []exportedContact
+
+	for page := 0; ; page++ {
+		var res struct {
+			Contacts []exportedContact
+		}
+
+		path := fmt.Sprintf("/contacts/v4/contacts/export?Page=%d&PageSize=%d", page, exportPageSize)
+
+		if err := conn.Get(ctx, path, &res); err != nil {
+			return nil, fmt.Errorf("exporting contacts: %w", err)
+		}
+
+		all = append(all, res.Contacts...)
+
+		if len(res.Contacts) < exportPageSize {
+			return all, nil
+		}
+	}
 }
 
 // uidOf returns the contact's vCard UID, falling back to Proton's own.

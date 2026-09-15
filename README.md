@@ -75,6 +75,7 @@ carbonate calendars         # list calendars; --events to show them, --ics for r
 carbonate event put         # create or replace an event from iCalendar on stdin
 carbonate event delete      # delete an event by its iCalendar UID
 carbonate contacts          # list contacts; --vcard for the full vCard
+carbonate sessions          # list Proton sessions; -revoke-stale to clear old ones
 carbonate serve             # serve CalDAV and CardDAV on 127.0.0.1:8080
 ```
 
@@ -183,13 +184,10 @@ Open, each with its reasoning in the issue:
 |---|---|
 | [#1](https://github.com/develonrails/carbonate/issues/1) | Recurrence exceptions are probably mishandled |
 | [#2](https://github.com/develonrails/carbonate/issues/2) | Invitations are never sent to attendees |
-| [#3](https://github.com/develonrails/carbonate/issues/3) | A CLI command run while `serve` is running kills the session |
 | [#4](https://github.com/develonrails/carbonate/issues/4) | Human verification (CAPTCHA) at login is not handled |
 | [#5](https://github.com/develonrails/carbonate/issues/5) | Cache is a 30-second timer rather than event-driven |
-| [#6](https://github.com/develonrails/carbonate/issues/6) | Listing contacts costs one request per contact |
 | [#7](https://github.com/develonrails/carbonate/issues/7) | `sync-collection` REPORT is not supported |
 | [#8](https://github.com/develonrails/carbonate/issues/8) | DAV backends cannot be tested without a live account |
-| [#10](https://github.com/develonrails/carbonate/issues/10) | The app version reported to Proton is a guess |
 
 One is worth knowing before you rely on carbonate: an attendee is recorded but
 never told they were invited ([#2](https://github.com/develonrails/carbonate/issues/2)).

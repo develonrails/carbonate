@@ -233,6 +233,11 @@ DAV `ctag` / `sync-token` so clients fetch just the delta.
   `Calendars[].Members[].Name` — not on the calendar, because a shared calendar
   lets each participant name it for themselves. Pick the member whose email is
   one of yours.
+- **Contacts have a bulk endpoint the library does not expose.**
+  `/contacts/v4/contacts/export` returns the cards for a page of contacts; the
+  listing carries the metadata but no cards, and go-proton-api's other call
+  fetches one contact at a time. Reading an address book is two requests, not
+  one per contact.
 - **`GetAllCalendarEvents` cannot be used.** It pages at go-proton-api's
   library-wide `maxPageSize` of 150, which the calendar endpoint rejects with
   "Invalid page size parameter" (code 2021). `internal/calendar` pages by hand

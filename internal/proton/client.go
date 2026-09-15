@@ -233,8 +233,30 @@ func (c *Conn) AddressKeyRing(addr api.Address) (*crypto.KeyRing, error) {
 // unrelated request and looks like a permissions problem.
 var ErrSessionLostScope = errors.New("this Proton session no longer has full access; log in again")
 
-// scopeCode is what Proton returns for a request the session may no longer make.
-const scopeCode = 9101
+// Codes Proton returns that mean something carbonate can explain better than
+// the bare message does.
+const (
+	// scopeCode: the session may no longer make this request.
+	scopeCode = 9101
+
+	// versionCode: the client version reported at login is no longer accepted.
+	versionCode = 5003
+)
+
+// ErrAppVersionRejected means Proton no longer accepts the version carbonate
+// reports. The value is a guess that happens to be recognised, so this will
+// come true eventually.
+var ErrAppVersionRejected = errors.New("Proton no longer accepts the version carbonate reports; set CARBONATE_APP_VERSION to a version it recognises")
+
+// explainVersion turns Proton's rejection of the client version into
+// something that names the knob to turn.
+func explainVersion(err error) error {
+	if err == nil || !strings.Contains(err.Error(), strconv.Itoa(versionCode)) {
+		return err
+	}
+
+	return fmt.Errorf("%w (%v)", ErrAppVersionRejected, err)
+}
 
 // explainScope turns Proton's bare complaint about scope into something
 // actionable.
@@ -435,7 +457,7 @@ func Login(ctx context.Context, username string, loginPassword []byte, p Prompte
 
 	c, auth, err := m.NewClientWithLogin(ctx, username, loginPassword)
 	if err != nil {
-		return nil, fmt.Errorf("login failed: %w", err)
+		return nil, fmt.Errorf("login failed: %w", explainVersion(err))
 	}
 	defer c.Close()
 
