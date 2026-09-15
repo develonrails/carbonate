@@ -383,14 +383,9 @@ func Login(ctx context.Context, username string, loginPassword []byte, p Prompte
 		return nil, ErrFIDO2Unsupported
 	}
 
-	// In two-password mode the login password only proves who you are; a
-	// second, separate password unlocks the keys.
-	mailboxPassword := loginPassword
-	if auth.PasswordMode == api.TwoPasswordMode {
-		mailboxPassword, err = p.Password("Mailbox password: ")
-		if err != nil {
-			return nil, err
-		}
+	mailboxPassword, err := mailboxPasswordFor(auth, loginPassword, p)
+	if err != nil {
+		return nil, err
 	}
 
 	user, err := c.GetUser(ctx)
@@ -409,6 +404,21 @@ func Login(ctx context.Context, username string, loginPassword []byte, p Prompte
 		RefreshToken:    auth.RefreshToken,
 		MailboxPassword: mailboxPassword,
 	}, nil
+}
+
+// mailboxPasswordFor returns the password that unlocks the user's keys.
+//
+// Most accounts use one password for both jobs. In two-password mode they are
+// separate: the login password only proves who you are to Proton, while the
+// mailbox password never leaves the machine and is the only thing that can
+// decrypt anything. Reusing the login password there would fail later, at the
+// unlock, with an error that says nothing about a second password existing.
+func mailboxPasswordFor(auth api.Auth, loginPassword []byte, p Prompter) ([]byte, error) {
+	if auth.PasswordMode != api.TwoPasswordMode {
+		return loginPassword, nil
+	}
+
+	return p.Password("Mailbox password: ")
 }
 
 // PersistFunc is called whenever Proton hands out a new refresh token. The

@@ -17,6 +17,30 @@ configured with the old one stops working. After the first login, use:
 carbonate auth <username> -keep-bridge-password
 ```
 
+## Two-password accounts
+
+Proton accounts can keep two passwords apart:
+
+| | |
+|---|---|
+| Login password | proves to Proton that you are you |
+| Mailbox password | decrypts your data, and never leaves your machine |
+
+Most accounts use one password for both, and you will never notice. If yours
+separates them, Proton's server holds nothing that can open your data: someone
+with your login password could sign in and still read nothing.
+
+carbonate asks for the second password only when the account actually uses one:
+
+```sh
+carbonate auth you@proton.me            # prompts for the mailbox password
+printf 'login\nmailbox\n' | carbonate auth you@proton.me --password-stdin
+```
+
+Unattended login reads the answers as successive lines, in the order they are
+asked. The window has a field for it; leaving it empty falls back to the login
+password.
+
 ## GNOME Calendar
 
 **Calendars → Add calendar → Add from web**, then the URL, your Proton address

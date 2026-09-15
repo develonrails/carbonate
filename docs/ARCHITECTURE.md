@@ -201,6 +201,13 @@ DAV `ctag` / `sync-token` so clients fetch just the delta.
 
 ## Gotchas found the hard way
 
+- **The mailbox password is not always the login password.** In two-password
+  mode they are separate, and reusing the login password fails much later — at
+  the local key unlock, with an error that says nothing about a second
+  password existing. `mailboxPasswordFor` decides this from `Auth.PasswordMode`
+  rather than assuming. The fake test server hardcodes one-password mode, so
+  the branch is covered by unit tests rather than end to end.
+
 - **Logging in needs an anonymous session first.** Proton now answers
   `/auth/v4/info` with `401 Invalid access token` unless the request already
   belongs to a session — even though logging in is by definition
