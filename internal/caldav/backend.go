@@ -351,6 +351,10 @@ func (b *Backend) PutCalendarObject(ctx context.Context, p string, cal *ical.Cal
 		return nil, err
 	}
 
+	if err := checkSupported(cal); err != nil {
+		return nil, err
+	}
+
 	var buf strings.Builder
 	if err := ical.NewEncoder(&buf).Encode(cal); err != nil {
 		return nil, fmt.Errorf("encoding submitted event: %w", err)
@@ -381,6 +385,31 @@ func (b *Backend) PutCalendarObject(ctx context.Context, p string, cal *ical.Cal
 	b.cache.Invalidate(id)
 
 	return b.GetCalendarObject(ctx, p, nil)
+}
+
+// checkSupported rejects what carbonate cannot store, before Proton is asked
+// to.
+//
+// A recurring event with an exception arrives as several VEVENTs sharing a UID
+// (RFC 4791 §4.1). carbonate writes one event per object, so both halves of
+// that fail — and a bare 500 reads as a server fault rather than a limitation.
+// See issue #1.
+func checkSupported(cal *ical.Calendar) error {
+	events := cal.Events()
+
+	if len(events) > 1 {
+		return webdav.NewHTTPError(http.StatusNotImplemented,
+			fmt.Errorf("this event has %d components, which means a recurring event with an exception; carbonate cannot store those yet", len(events)))
+	}
+
+	for _, e := range events {
+		if p := e.Props.Get("RECURRENCE-ID"); p != nil {
+			return webdav.NewHTTPError(http.StatusNotImplemented,
+				fmt.Errorf("this event is an exception to a recurring series, which carbonate cannot store yet"))
+		}
+	}
+
+	return nil
 }
 
 func (b *Backend) DeleteCalendarObject(ctx context.Context, p string) error {

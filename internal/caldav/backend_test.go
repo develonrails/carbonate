@@ -2,6 +2,9 @@ package caldav
 
 import (
 	"context"
+	"strings"
+
+	"github.com/emersion/go-ical"
 	"testing"
 	"time"
 
@@ -194,5 +197,61 @@ func TestPathDepths(t *testing.T) {
 		if got != want {
 			t.Errorf("%s has depth %d below the prefix, want %d", path, got, want)
 		}
+	}
+}
+
+func calendarWith(t *testing.T, ics string) *ical.Calendar {
+	t.Helper()
+
+	cal, err := ical.NewDecoder(strings.NewReader(ics)).Decode()
+	if err != nil {
+		t.Fatalf("decoding test calendar: %v", err)
+	}
+
+	return cal
+}
+
+// A recurring event with an exception arrives as several components sharing a
+// UID. carbonate stores one event per object, so this has to be refused — and
+// refused as a limitation rather than a server fault, or the client's user is
+// left thinking something broke.
+func TestPutRejectsARecurrenceException(t *testing.T) {
+	series := "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//t//EN\r\n" +
+		"BEGIN:VEVENT\r\nUID:s@x\r\nDTSTAMP:20260915T080000Z\r\nDTSTART:20261006T090000Z\r\nRRULE:FREQ=WEEKLY\r\nEND:VEVENT\r\n" +
+		"BEGIN:VEVENT\r\nUID:s@x\r\nDTSTAMP:20260915T080000Z\r\nRECURRENCE-ID:20261013T090000Z\r\nDTSTART:20261013T140000Z\r\nEND:VEVENT\r\n" +
+		"END:VCALENDAR\r\n"
+
+	err := checkSupported(calendarWith(t, series))
+	if err == nil {
+		t.Fatal("a multi-component event was accepted")
+	}
+
+	// go-webdav keeps its HTTP error type unexported, so the status is
+	// asserted end to end elsewhere; here the message is what matters, since
+	// it is what the user is shown.
+	if !strings.Contains(err.Error(), "recurring") {
+		t.Errorf("error %q does not explain what is unsupported", err)
+	}
+}
+
+// The same applies to an exception sent on its own.
+func TestPutRejectsALoneException(t *testing.T) {
+	lone := "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//t//EN\r\n" +
+		"BEGIN:VEVENT\r\nUID:s@x\r\nDTSTAMP:20260915T080000Z\r\nRECURRENCE-ID:20261013T090000Z\r\nDTSTART:20261013T140000Z\r\nEND:VEVENT\r\n" +
+		"END:VCALENDAR\r\n"
+
+	if err := checkSupported(calendarWith(t, lone)); err == nil {
+		t.Error("a lone recurrence exception was accepted")
+	}
+}
+
+// An ordinary recurring event is not an exception and must still go through.
+func TestPutAcceptsAPlainSeries(t *testing.T) {
+	series := "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//t//EN\r\n" +
+		"BEGIN:VEVENT\r\nUID:s@x\r\nDTSTAMP:20260915T080000Z\r\nDTSTART:20261006T090000Z\r\nRRULE:FREQ=WEEKLY\r\nEND:VEVENT\r\n" +
+		"END:VCALENDAR\r\n"
+
+	if err := checkSupported(calendarWith(t, series)); err != nil {
+		t.Errorf("a plain recurring event was rejected: %v", err)
 	}
 }
