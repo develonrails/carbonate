@@ -486,16 +486,18 @@ func Login(ctx context.Context, username string, loginPassword []byte, p Prompte
 		return nil, fmt.Errorf("fetching user: %w", err)
 	}
 
-	if _, _, err := unlock(ctx, c, user, mailboxPassword); err != nil {
+	_, salted, err := unlock(ctx, c, user, mailboxPassword)
+	if err != nil {
 		return nil, err
 	}
 
 	return &session.Session{
-		Username:        username,
-		UserID:          user.ID,
-		UID:             auth.UID,
-		RefreshToken:    auth.RefreshToken,
-		MailboxPassword: mailboxPassword,
+		Username:          username,
+		UserID:            user.ID,
+		UID:               auth.UID,
+		RefreshToken:      auth.RefreshToken,
+		MailboxPassword:   mailboxPassword,
+		SaltedKeyPassword: salted,
 	}, nil
 }
 
@@ -578,10 +580,11 @@ func Resume(ctx context.Context, store TokenStore) (*Conn, error) {
 		return nil, fmt.Errorf("fetching user: %w", err)
 	}
 
-	userKR, salted, err := unlock(ctx, c, user, s.MailboxPassword)
+	userKR, salted, err := unlockStored(ctx, c, user, s, store)
 	if err != nil {
 		c.Close()
 		m.Close()
+
 		return nil, err
 	}
 
@@ -589,6 +592,41 @@ func Resume(ctx context.Context, store TokenStore) (*Conn, error) {
 	conn.saltedKeyPass = salted
 
 	return conn, nil
+}
+
+// unlockStored opens the user's keyring using the salted passphrase kept with
+// the session, falling back to asking Proton for the salts.
+//
+// Fetching the salts needs a scope that a refreshed session eventually loses:
+// ordinary requests keep working while /core/v4/keys/salts answers 403, which
+// stopped the bridge with an error about permissions that had nothing to do
+// with what it was trying to read. Keeping the salted passphrase avoids the
+// endpoint altogether.
+//
+// The fallback matters for sessions stored before this existed, and for the
+// day a key is added or rotated and the old passphrase stops working.
+func unlockStored(ctx context.Context, c *api.Client, user api.User, s *session.Session, store TokenStore) (*crypto.KeyRing, []byte, error) {
+	if len(s.SaltedKeyPassword) > 0 {
+		if kr, err := user.Keys.Unlock(s.SaltedKeyPassword, nil); err == nil && kr != nil && kr.CountDecryptionEntities() > 0 {
+			return kr, s.SaltedKeyPassword, nil
+		}
+	}
+
+	kr, salted, err := unlock(ctx, c, user, s.MailboxPassword)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Keep what was just derived, so the salts are not needed again.
+	s.SaltedKeyPassword = salted
+
+	if saver, ok := store.(interface{ Save() error }); ok {
+		if err := saver.Save(); err != nil {
+			fmt.Fprintf(os.Stderr, "carbonate: could not store the salted key password: %v\n", err)
+		}
+	}
+
+	return kr, salted, nil
 }
 
 // unlock derives the salted key passphrase and opens the user's keyring.

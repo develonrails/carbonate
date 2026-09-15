@@ -31,6 +31,10 @@ carbonate is already running and using this session; stop it first
 Stop the server, or point the other command at a different session file with
 `-session`.
 
+If a command ever reports that the session no longer has full access, log in
+again with `-keep-bridge-password`: your clients keep working, since the bridge
+password does not change.
+
 `carbonate sessions` shows what is open on the Proton side. Proton allows a
 limited number and takes access away from older ones rather than refusing new
 ones, so requests eventually fail for reasons that look unrelated;

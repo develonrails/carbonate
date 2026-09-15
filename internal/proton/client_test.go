@@ -208,6 +208,10 @@ func TestResumeWrongMailboxPassword(t *testing.T) {
 	sess := login(t)
 	sess.MailboxPassword = []byte("not-the-mailbox-password")
 
+	// Clear the derived passphrase too: it is what actually opens the keys,
+	// so while it is valid a wrong mailbox password is never consulted.
+	sess.SaltedKeyPassword = nil
+
 	conn, err := proton.Resume(context.Background(), &fakeStore{sess: sess})
 	if err == nil {
 		conn.Close()
@@ -267,4 +271,74 @@ func (f *fakeStore) Update(uid, refreshToken string) error {
 	f.sess.UID, f.sess.RefreshToken = uid, refreshToken
 
 	return nil
+}
+
+// Fetching the key salts needs a scope that a refreshed session eventually
+// loses, which stopped the bridge dead while every other request still
+// worked. Resuming must not depend on it.
+func TestResumeDoesNotFetchSaltsWhenItNeedNot(t *testing.T) {
+	fake, _ := newTestServer(t)
+
+	sess := login(t)
+
+	if len(sess.SaltedKeyPassword) == 0 {
+		t.Fatal("login did not keep the salted key password")
+	}
+
+	salts := 0
+
+	fake.AddCallWatcher(func(server.Call) { salts++ }, "/core/v4/keys/salts")
+
+	conn, err := proton.Resume(context.Background(), &fakeStore{sess: sess})
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	defer conn.Close()
+
+	if salts != 0 {
+		t.Errorf("asked for the key salts %d times, want none", salts)
+	}
+}
+
+// A session stored before the salted password was kept, or one whose keys
+// have since changed, must still work.
+func TestResumeFallsBackToFetchingSalts(t *testing.T) {
+	newTestServer(t)
+
+	sess := login(t)
+	sess.SaltedKeyPassword = nil
+
+	conn, err := proton.Resume(context.Background(), &fakeStore{sess: sess})
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	defer conn.Close()
+
+	if conn.UserKR == nil || conn.UserKR.CountDecryptionEntities() == 0 {
+		t.Error("the fallback did not unlock the keys")
+	}
+
+	// And the derived value is kept, so the next resume needs no salts.
+	if len(sess.SaltedKeyPassword) == 0 {
+		t.Error("the derived salted password was not stored for next time")
+	}
+}
+
+// A stored value that no longer opens anything must not be trusted over
+// asking again.
+func TestResumeIgnoresAStaleSaltedPassword(t *testing.T) {
+	newTestServer(t)
+
+	sess := login(t)
+	sess.SaltedKeyPassword = []byte("not the right passphrase at all")
+
+	conn, err := proton.Resume(context.Background(), &fakeStore{sess: sess})
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	defer conn.Close()
+
+	if conn.UserKR == nil || conn.UserKR.CountDecryptionEntities() == 0 {
+		t.Error("a stale salted password was trusted instead of refetching")
+	}
 }

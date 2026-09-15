@@ -43,6 +43,14 @@ func (f *File) Session() *Session {
 	return f.session
 }
 
+// Save writes the tracked session out as it stands.
+func (f *File) Save() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return Save(f.path, f.password, f.session)
+}
+
 // Update records rotated credentials and writes them out.
 //
 // Called from request goroutines, so it takes the lock; and it writes

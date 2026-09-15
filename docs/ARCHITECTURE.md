@@ -242,6 +242,23 @@ DAV `ctag` / `sync-token` so clients fetch just the delta.
 
 ## Gotchas found the hard way
 
+- **Key salts need a scope a refreshed session loses.** The bridge kept
+  stopping with `403 ... Access token does not have sufficient scope` on
+  `/core/v4/keys/salts`, while every other request on the same session
+  continued to work — `/core/v4/users` answered normally a moment earlier.
+  Proton evidently treats the salts as sensitive and withdraws the right to
+  read them from a session that has only been refreshed, never
+  re-authenticated.
+
+  So the salts are not read on resume at all: the salted passphrase is derived
+  once at login and kept with the session. The fallback remains for a session
+  stored before this, and for the day a key is rotated and the old passphrase
+  stops opening anything.
+
+  The first two explanations tried — too many sessions, then a session too old
+  — were both wrong. What settled it was noticing which call in the sequence
+  had failed: the error came from the salts, and the call before it had
+  succeeded.
 - **The mailbox password is not always the login password.** In two-password
   mode they are separate, and reusing the login password fails much later — at
   the local key unlock, with an error that says nothing about a second

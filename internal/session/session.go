@@ -37,6 +37,15 @@ type Session struct {
 	// MailboxPassword unlocks the user's OpenPGP keys. Proton never sees it,
 	// and in two-password mode it differs from the login password.
 	MailboxPassword []byte
+
+	// SaltedKeyPassword is MailboxPassword after salting, which is what
+	// actually opens the keys.
+	//
+	// It is kept so that resuming a session need not ask Proton for the key
+	// salts. That endpoint requires a scope a refreshed session eventually
+	// loses, and losing it stopped the bridge dead while every other request
+	// still worked.
+	SaltedKeyPassword []byte
 }
 
 // scrypt parameters. N is the cost; raising it slows a brute-force attack on
