@@ -79,7 +79,7 @@ Usage:
   carbonate event put         create or replace an event from iCalendar on stdin
   carbonate event delete      delete an event by its iCalendar UID
   carbonate contacts          list contacts, optionally as vCards
-  carbonate sessions          list Proton sessions; -revoke-others to clear them
+  carbonate sessions          list Proton sessions; -revoke-stale to clear old ones
   carbonate version           print the version
 
 Unattended login reads answers from stdin, one line at a time, in the order
