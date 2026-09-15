@@ -370,6 +370,25 @@ This is the table I expected to have to derive by experiment:
 | Calendar | encrypted + signed | `uid` `dtstamp` `comment` |
 | Attendees | encrypted + signed | `uid` `dtstamp` `attendee` |
 
+### Recurring events and their exceptions
+
+Proton stores an exception — one occurrence moved or edited — as a **separate
+event with the same UID**, told apart by `RecurrenceID`. A client sends both in
+one object (RFC 4791 §4.1), so both directions need converting.
+
+The mistake that made this look impossible for a while: matching a write by UID
+alone found the series, turned the exception into an update of it, and sent
+`RECURRENCE-ID` on an event that also has an `RRULE`. Proton refuses that with
+code 2011, "These properties are not supported" — a message about properties
+for a problem about identity. Writes match on UID *and* recurrence.
+
+On the way out, the components are grouped back into one resource. Serving them
+separately would put two resources at one address, since the path is built from
+the UID. The ETag covers every component, so editing one occurrence changes the
+tag of the whole resource, and deleting the resource takes the exceptions with
+it — an exception left behind is an occurrence of a series that no longer
+exists.
+
 `uid` and `dtstamp` repeat in every card — which is exactly what the live event
 showed on the read side, and why reassembly has to collapse them.
 

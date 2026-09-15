@@ -87,12 +87,24 @@ func (b *Backend) sync(ctx context.Context, p, token string, wantData bool) (syn
 		current[e.ID] = e
 	}
 
+	_, groups := byUID(events)
+
 	segment := calendarSegment(p)
 	result := syncResult{Token: newToken}
 
+	reported := make(map[string]bool)
+
 	for _, eventID := range changedIDs {
 		if e, ok := current[eventID]; ok {
-			result.Changed = append(result.Changed, member(segment, e, wantData))
+			// One resource holds every component sharing a UID, so a change
+			// to any of them is one change to that resource.
+			if reported[e.UID] {
+				continue
+			}
+
+			reported[e.UID] = true
+
+			result.Changed = append(result.Changed, member(segment, groups[e.UID], wantData))
 
 			continue
 		}
@@ -131,18 +143,20 @@ func (b *Backend) fullSync(ctx context.Context, p, calendarID string, wantData b
 	segment := calendarSegment(p)
 	result := syncResult{Token: token, Resync: true}
 
-	for _, e := range events {
-		result.Changed = append(result.Changed, member(segment, e, wantData))
+	order, groups := byUID(events)
+
+	for _, uid := range order {
+		result.Changed = append(result.Changed, member(segment, groups[uid], wantData))
 	}
 
 	return result, nil
 }
 
-func member(segment string, e calendar.Event, wantData bool) changedMember {
-	m := changedMember{Path: objectPath(segment, e.UID), ETag: etag(e)}
+func member(segment string, events []calendar.Event, wantData bool) changedMember {
+	m := changedMember{Path: objectPath(segment, events[0].UID), ETag: etag(events)}
 
 	if wantData {
-		m.ICS = e.ICS()
+		m.ICS = calendar.Merge(events)
 	}
 
 	return m

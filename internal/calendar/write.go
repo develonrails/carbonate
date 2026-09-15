@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	api "github.com/ProtonMail/go-proton-api"
 	"github.com/ProtonMail/gopenpgp/v2/crypto"
@@ -108,10 +109,31 @@ type syncReq struct {
 // care whether Proton has seen it before. It reports whether the event was
 // created.
 func Put(ctx context.Context, conn *proton.Conn, calendarID, ics string) (eventID string, created bool, err error) {
-	event, err := parseEvent(ics)
+	events, err := parseEvents(ics)
 	if err != nil {
 		return "", false, err
 	}
+
+	// A recurring event and its exceptions arrive together, sharing a UID and
+	// told apart by which occurrence each replaces (RFC 4791 §4.1). The
+	// series is written first, so that an exception never lands before the
+	// thing it is an exception to.
+	var lastID string
+	var anyCreated bool
+
+	for _, event := range events {
+		id, wasCreated, err := putOne(ctx, conn, calendarID, event)
+		if err != nil {
+			return "", false, err
+		}
+
+		lastID, anyCreated = id, anyCreated || wasCreated
+	}
+
+	return lastID, anyCreated, nil
+}
+
+func putOne(ctx context.Context, conn *proton.Conn, calendarID string, event *ical.Event) (eventID string, created bool, err error) {
 
 	uid := ""
 	if p := event.Props.Get("UID"); p != nil {
@@ -127,7 +149,7 @@ func Put(ctx context.Context, conn *proton.Conn, calendarID, ics string) (eventI
 		return "", false, err
 	}
 
-	existing, err := findByUID(ctx, conn, calendarID, uid)
+	existing, err := findEvent(ctx, conn, calendarID, uid, recurrenceIDOf(event))
 	if err != nil {
 		return "", false, err
 	}
@@ -160,20 +182,29 @@ func Delete(ctx context.Context, conn *proton.Conn, calendarID, uid string) (boo
 		return false, err
 	}
 
-	existing, err := findByUID(ctx, conn, calendarID, uid)
+	events, err := fetchAll(ctx, conn, calendarID)
 	if err != nil {
 		return false, err
 	}
 
-	if existing == nil {
-		return false, nil
+	deleted := false
+
+	// Every component sharing the UID goes, exceptions included. They are one
+	// resource to a client, and an exception left behind is an occurrence of
+	// a series that no longer exists.
+	for i := range events {
+		if events[i].UID != uid {
+			continue
+		}
+
+		if _, err := sync(ctx, conn, calendarID, keys.MemberID, deleteEntry{ID: events[i].ID}, false); err != nil {
+			return false, err
+		}
+
+		deleted = true
 	}
 
-	if _, err := sync(ctx, conn, calendarID, keys.MemberID, deleteEntry{ID: existing.ID}, false); err != nil {
-		return false, err
-	}
-
-	return true, nil
+	return deleted, nil
 }
 
 const (
@@ -245,16 +276,20 @@ func sync(ctx context.Context, conn *proton.Conn, calendarID, memberID string, e
 	return event.ID, nil
 }
 
-// findByUID locates an event by its iCalendar UID, returning nil when the
-// calendar has no such event.
-func findByUID(ctx context.Context, conn *proton.Conn, calendarID, uid string) (*rawEvent, error) {
+// findEvent locates an event by UID and, for an exception to a recurring
+// series, by which occurrence it replaces.
+//
+// Matching on UID alone conflates a series with its exceptions: they share a
+// UID by design, so a write meant for one occurrence would rewrite the whole
+// series instead — which Proton refuses, since an event cannot be both.
+func findEvent(ctx context.Context, conn *proton.Conn, calendarID, uid string, recurrenceID int64) (*rawEvent, error) {
 	events, err := fetchAll(ctx, conn, calendarID)
 	if err != nil {
 		return nil, err
 	}
 
 	for i := range events {
-		if events[i].UID == uid {
+		if events[i].UID == uid && events[i].RecurrenceID == recurrenceID {
 			return &events[i], nil
 		}
 	}
@@ -262,22 +297,51 @@ func findByUID(ctx context.Context, conn *proton.Conn, calendarID, uid string) (
 	return nil, nil
 }
 
-// parseEvent extracts the single VEVENT from an iCalendar object.
-func parseEvent(ics string) (*ical.Event, error) {
+// parseEvents extracts the components of an iCalendar object, series first.
+//
+// A recurring event and its exceptions share a UID, and the exception is
+// meaningless before the series it modifies exists, so order matters.
+func parseEvents(ics string) ([]*ical.Event, error) {
 	cal, err := ical.NewDecoder(strings.NewReader(ics)).Decode()
 	if err != nil {
 		return nil, fmt.Errorf("parsing iCalendar: %w", err)
 	}
 
-	events := cal.Events()
-	switch len(events) {
-	case 1:
-		return &events[0], nil
-	case 0:
+	components := cal.Events()
+	if len(components) == 0 {
 		return nil, fmt.Errorf("iCalendar object contains no VEVENT")
-	default:
+	}
+
+	series := make([]*ical.Event, 0, len(components))
+	exceptions := make([]*ical.Event, 0, len(components))
+
+	for i := range components {
+		event := &components[i]
+
+		if recurrenceIDOf(event) == 0 {
+			series = append(series, event)
+
+			continue
+		}
+
+		exceptions = append(exceptions, event)
+	}
+
+	return append(series, exceptions...), nil
+}
+
+// parseEvent extracts a single VEVENT, for callers that handle only one.
+func parseEvent(ics string) (*ical.Event, error) {
+	events, err := parseEvents(ics)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(events) != 1 {
 		return nil, fmt.Errorf("iCalendar object contains %d VEVENTs, want exactly one", len(events))
 	}
+
+	return events[0], nil
 }
 
 func buildEvent(event *ical.Event, keys *proton.CalendarKeys, existing *rawEvent) (*eventData, error) {
@@ -398,6 +462,25 @@ func buildAttendees(event *ical.Event, keys *proton.CalendarKeys, newPacket, old
 		Data:      base64.StdEncoding.EncodeToString(encrypted),
 		Signature: signature,
 	}}, clear, nil
+}
+
+// recurrenceIDOf returns the occurrence an event replaces, as the Unix time
+// Proton records it by, or zero for an ordinary event.
+func recurrenceIDOf(event *ical.Event) int64 {
+	prop := event.Props.Get("RECURRENCE-ID")
+	if prop == nil {
+		return 0
+	}
+
+	when, err := time.Parse("20060102T150405Z", strings.TrimSpace(prop.Value))
+	if err != nil {
+		// Also accept a date-only value, which a full-day series uses.
+		if when, err = time.Parse("20060102", strings.TrimSpace(prop.Value)); err != nil {
+			return 0
+		}
+	}
+
+	return when.Unix()
 }
 
 // ensureOrganizer names us as organiser when the event invites people and the

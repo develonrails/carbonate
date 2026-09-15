@@ -183,7 +183,6 @@ Open, each with its reasoning in the issue:
 
 | | |
 |---|---|
-| [#1](https://github.com/develonrails/carbonate/issues/1) | Recurrence exceptions are probably mishandled |
 | [#2](https://github.com/develonrails/carbonate/issues/2) | Invitations are never sent to attendees |
 | [#4](https://github.com/develonrails/carbonate/issues/4) | Human verification (CAPTCHA) at login is not handled |
 

@@ -271,25 +271,68 @@ func (b *Backend) events(ctx context.Context, calendarID string) ([]calendar.Eve
 	})
 }
 
-// object converts a decrypted event into a CalDAV resource.
-func object(calendarToken string, e calendar.Event) (caldav.CalendarObject, error) {
-	parsed, err := ical.NewDecoder(strings.NewReader(e.ICS())).Decode()
+// group collects the events sharing a UID into one CalDAV resource.
+//
+// A recurring event and its exceptions share a UID, and RFC 4791 §4.1 puts
+// every such component in a single resource. Serving them separately would
+// put two resources at one address.
+func group(calendarToken string, events []calendar.Event) (caldav.CalendarObject, error) {
+	parsed, err := ical.NewDecoder(strings.NewReader(calendar.Merge(events))).Decode()
 	if err != nil {
-		return caldav.CalendarObject{}, fmt.Errorf("re-parsing event %s: %w", e.UID, err)
+		return caldav.CalendarObject{}, fmt.Errorf("re-parsing event %s: %w", events[0].UID, err)
+	}
+
+	modified := events[0].Modified
+	for _, e := range events[1:] {
+		if e.Modified.After(modified) {
+			modified = e.Modified
+		}
 	}
 
 	return caldav.CalendarObject{
-		Path:    objectPath(calendarToken, e.UID),
-		ModTime: e.Modified,
-		ETag:    etag(e),
+		Path:    objectPath(calendarToken, events[0].UID),
+		ModTime: modified,
+		ETag:    etag(events),
 		Data:    parsed,
 	}, nil
 }
 
-// etag changes whenever Proton reports the event as edited, which is what
-// lets a client skip unchanged objects.
-func etag(e calendar.Event) string {
-	return strconv.FormatInt(e.Modified.Unix(), 10) + "-" + token(e.ID)[:8]
+// byUID groups events into resources, keeping the order they arrived in so
+// that a listing is stable between calls.
+func byUID(events []calendar.Event) ([]string, map[string][]calendar.Event) {
+	order := make([]string, 0, len(events))
+	groups := make(map[string][]calendar.Event, len(events))
+
+	for _, e := range events {
+		if _, seen := groups[e.UID]; !seen {
+			order = append(order, e.UID)
+		}
+
+		groups[e.UID] = append(groups[e.UID], e)
+	}
+
+	return order, groups
+}
+
+// etag changes whenever any component of a resource is edited, which is what
+// lets a client skip the ones it already has.
+//
+// It covers every component: editing one occurrence of a series must change
+// the tag of the resource the whole series is served in.
+func etag(events []calendar.Event) string {
+	latest := int64(0)
+
+	var ids strings.Builder
+
+	for _, e := range events {
+		if when := e.Modified.Unix(); when > latest {
+			latest = when
+		}
+
+		ids.WriteString(e.ID)
+	}
+
+	return strconv.FormatInt(latest, 10) + "-" + token(ids.String())[:8]
 }
 
 func (b *Backend) ListCalendarObjects(ctx context.Context, p string, req *caldav.CalendarCompRequest) ([]caldav.CalendarObject, error) {
@@ -306,10 +349,12 @@ func (b *Backend) ListCalendarObjects(ctx context.Context, p string, req *caldav
 	b.remember(id, events)
 
 	segment := calendarSegment(p)
-	out := make([]caldav.CalendarObject, 0, len(events))
+	order, groups := byUID(events)
 
-	for _, e := range events {
-		obj, err := object(segment, e)
+	out := make([]caldav.CalendarObject, 0, len(order))
+
+	for _, uid := range order {
+		obj, err := group(segment, groups[uid])
 		if err != nil {
 			return nil, err
 		}
@@ -336,23 +381,27 @@ func (b *Backend) GetCalendarObject(ctx context.Context, p string, req *caldav.C
 		return nil, err
 	}
 
+	var matching []calendar.Event
+
 	for _, e := range events {
-		if e.UID != uid {
-			continue
+		if e.UID == uid {
+			matching = append(matching, e)
 		}
-
-		obj, err := object(calendarSegment(p), e)
-		if err != nil {
-			return nil, err
-		}
-
-		// Answer at the path the client asked for, not the canonical one.
-		obj.Path = path.Clean(p)
-
-		return &obj, nil
 	}
 
-	return nil, webdav.NewHTTPError(http.StatusNotFound, fmt.Errorf("no event with UID %s", uid))
+	if len(matching) == 0 {
+		return nil, webdav.NewHTTPError(http.StatusNotFound, fmt.Errorf("no event with UID %s", uid))
+	}
+
+	obj, err := group(calendarSegment(p), matching)
+	if err != nil {
+		return nil, err
+	}
+
+	// Answer at the path the client asked for, not the canonical one.
+	obj.Path = path.Clean(p)
+
+	return &obj, nil
 }
 
 func (b *Backend) QueryCalendarObjects(ctx context.Context, p string, query *caldav.CalendarQuery) ([]caldav.CalendarObject, error) {
@@ -367,10 +416,6 @@ func (b *Backend) QueryCalendarObjects(ctx context.Context, p string, query *cal
 func (b *Backend) PutCalendarObject(ctx context.Context, p string, cal *ical.Calendar, opts *caldav.PutCalendarObjectOptions) (*caldav.CalendarObject, error) {
 	id, err := b.calendarID(ctx, p)
 	if err != nil {
-		return nil, err
-	}
-
-	if err := checkSupported(cal); err != nil {
 		return nil, err
 	}
 
@@ -404,31 +449,6 @@ func (b *Backend) PutCalendarObject(ctx context.Context, p string, cal *ical.Cal
 	b.cache.Invalidate(id)
 
 	return b.GetCalendarObject(ctx, p, nil)
-}
-
-// checkSupported rejects what carbonate cannot store, before Proton is asked
-// to.
-//
-// A recurring event with an exception arrives as several VEVENTs sharing a UID
-// (RFC 4791 §4.1). carbonate writes one event per object, so both halves of
-// that fail — and a bare 500 reads as a server fault rather than a limitation.
-// See issue #1.
-func checkSupported(cal *ical.Calendar) error {
-	events := cal.Events()
-
-	if len(events) > 1 {
-		return webdav.NewHTTPError(http.StatusNotImplemented,
-			fmt.Errorf("this event has %d components, which means a recurring event with an exception; carbonate cannot store those yet", len(events)))
-	}
-
-	for _, e := range events {
-		if p := e.Props.Get("RECURRENCE-ID"); p != nil {
-			return webdav.NewHTTPError(http.StatusNotImplemented,
-				fmt.Errorf("this event is an exception to a recurring series, which carbonate cannot store yet"))
-		}
-	}
-
-	return nil
 }
 
 func (b *Backend) DeleteCalendarObject(ctx context.Context, p string) error {

@@ -40,6 +40,10 @@ type Event struct {
 
 	// Alarms are the reminders Proton keeps outside the encrypted parts.
 	Alarms []notification
+
+	// RecurrenceID identifies which occurrence of a series this event
+	// replaces. Zero for an ordinary event or for the series itself.
+	RecurrenceID int64
 }
 
 // rawEvent is an event as Proton actually sends it.
@@ -52,6 +56,11 @@ type rawEvent struct {
 	api.CalendarEvent
 
 	Notifications []notification
+
+	// RecurrenceID marks an event as an exception to the series sharing its
+	// UID. go-proton-api does not decode it, and without it every occurrence
+	// of a series looks like the same event.
+	RecurrenceID int64
 }
 
 // multiValued lists iCalendar properties that may legitimately appear more
@@ -111,15 +120,68 @@ func (e Event) ICS() string {
 		"BEGIN:VCALENDAR",
 		"VERSION:2.0",
 		"PRODID:-//carbonate//EN",
-		"BEGIN:VEVENT",
 	}
-	out = append(out, body...)
+	out = append(out, e.component()...)
+	out = append(out, "END:VCALENDAR")
+
+	return strings.Join(out, "\r\n") + "\r\n"
+}
+
+// component renders the VEVENT alone, for placing inside a calendar object
+// that may hold several.
+func (e Event) component() []string {
+	var body []string
+
+	seen := make(map[string]bool)
+
+	for _, line := range e.Properties {
+		switch name(line) {
+		case "BEGIN", "END", "VERSION", "PRODID", "CALSCALE", "METHOD":
+			continue
+		}
+
+		key := name(line)
+		if !multiValued[key] && !strings.HasPrefix(key, "X-") {
+			if seen[key] {
+				continue
+			}
+
+			seen[key] = true
+		}
+
+		body = append(body, line)
+	}
+
+	out := append([]string{"BEGIN:VEVENT"}, body...)
 
 	// Reminders live outside the encrypted parts, so they are put back here
 	// rather than arriving with the rest of the properties.
 	out = append(out, alarmLines(e.Alarms, e.Summary())...)
 
-	out = append(out, "END:VEVENT", "END:VCALENDAR")
+	return append(out, "END:VEVENT")
+}
+
+// Merge renders a series and its exceptions as one iCalendar object.
+//
+// RFC 4791 §4.1 puts every component sharing a UID in a single resource, and
+// a client that met the same UID at two addresses would have no way to tell
+// which was which.
+func Merge(events []Event) string {
+	if len(events) == 1 {
+		return events[0].ICS()
+	}
+
+	out := []string{
+		"BEGIN:VCALENDAR",
+		"VERSION:2.0",
+		"PRODID:-//carbonate//EN",
+	}
+
+	for _, e := range events {
+		out = append(out, e.component()...)
+	}
+
+	out = append(out, "END:VCALENDAR")
 
 	return strings.Join(out, "\r\n") + "\r\n"
 }
@@ -260,14 +322,15 @@ func List(ctx context.Context, conn *proton.Conn) ([]Calendar, error) {
 
 func decode(raw rawEvent, calKR, addrKR *crypto.KeyRing) (Event, error) {
 	event := Event{
-		Alarms:    raw.Notifications,
-		ID:        raw.ID,
-		UID:       raw.UID,
-		Start:     time.Unix(raw.StartTime, 0),
-		End:       time.Unix(raw.EndTime, 0),
-		Modified:  time.Unix(raw.LastEditTime, 0),
-		FullDay:   bool(raw.FullDay),
-		Attendees: len(raw.Attendees),
+		Alarms:       raw.Notifications,
+		RecurrenceID: raw.RecurrenceID,
+		ID:           raw.ID,
+		UID:          raw.UID,
+		Start:        time.Unix(raw.StartTime, 0),
+		End:          time.Unix(raw.EndTime, 0),
+		Modified:     time.Unix(raw.LastEditTime, 0),
+		FullDay:      bool(raw.FullDay),
+		Attendees:    len(raw.Attendees),
 	}
 
 	// Shared and attendee parts are encrypted under the shared key packet;

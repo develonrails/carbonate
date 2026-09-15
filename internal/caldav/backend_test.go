@@ -2,10 +2,8 @@ package caldav
 
 import (
 	"context"
-	"strings"
 	"time"
 
-	"github.com/emersion/go-ical"
 	"testing"
 
 	"github.com/develonrails/carbonate/internal/calendar"
@@ -125,25 +123,32 @@ func TestObjectPathRoundTrip(t *testing.T) {
 	}
 }
 
-// The ETag must change when the event does, or a client will never refetch.
+// The tag must change when any component changes, or a client will never
+// refetch. It covers every component of a resource, since editing one
+// occurrence of a series has to change the tag of the whole thing.
 func TestETagTracksModification(t *testing.T) {
-	base := calendar.Event{ID: "event-id", Modified: time.Unix(1000, 0)}
+	base := []calendar.Event{{ID: "event-id", Modified: time.Unix(1000, 0)}}
 
-	edited := base
-	edited.Modified = time.Unix(2000, 0)
+	edited := []calendar.Event{{ID: "event-id", Modified: time.Unix(2000, 0)}}
 
 	if etag(base) == etag(edited) {
-		t.Error("ETag did not change when the event was edited")
+		t.Error("the tag did not change when the event was edited")
 	}
 
-	other := calendar.Event{ID: "different-id", Modified: time.Unix(1000, 0)}
-
-	if etag(base) == etag(other) {
-		t.Error("two different events share an ETag")
+	if etag(base) == etag([]calendar.Event{{ID: "different-id", Modified: time.Unix(1000, 0)}}) {
+		t.Error("two different events share a tag")
 	}
 
 	if etag(base) != etag(base) {
-		t.Error("ETag is not stable")
+		t.Error("the tag is not stable")
+	}
+
+	// An exception added to a series is a change to the resource holding it.
+	withException := append(append([]calendar.Event{}, base...),
+		calendar.Event{ID: "exception-id", Modified: time.Unix(1500, 0), RecurrenceID: 42})
+
+	if etag(base) == etag(withException) {
+		t.Error("adding an exception to a series left the tag unchanged")
 	}
 }
 
@@ -196,61 +201,5 @@ func TestPathDepths(t *testing.T) {
 		if got != want {
 			t.Errorf("%s has depth %d below the prefix, want %d", path, got, want)
 		}
-	}
-}
-
-func calendarWith(t *testing.T, ics string) *ical.Calendar {
-	t.Helper()
-
-	cal, err := ical.NewDecoder(strings.NewReader(ics)).Decode()
-	if err != nil {
-		t.Fatalf("decoding test calendar: %v", err)
-	}
-
-	return cal
-}
-
-// A recurring event with an exception arrives as several components sharing a
-// UID. carbonate stores one event per object, so this has to be refused — and
-// refused as a limitation rather than a server fault, or the client's user is
-// left thinking something broke.
-func TestPutRejectsARecurrenceException(t *testing.T) {
-	series := "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//t//EN\r\n" +
-		"BEGIN:VEVENT\r\nUID:s@x\r\nDTSTAMP:20260915T080000Z\r\nDTSTART:20261006T090000Z\r\nRRULE:FREQ=WEEKLY\r\nEND:VEVENT\r\n" +
-		"BEGIN:VEVENT\r\nUID:s@x\r\nDTSTAMP:20260915T080000Z\r\nRECURRENCE-ID:20261013T090000Z\r\nDTSTART:20261013T140000Z\r\nEND:VEVENT\r\n" +
-		"END:VCALENDAR\r\n"
-
-	err := checkSupported(calendarWith(t, series))
-	if err == nil {
-		t.Fatal("a multi-component event was accepted")
-	}
-
-	// go-webdav keeps its HTTP error type unexported, so the status is
-	// asserted end to end elsewhere; here the message is what matters, since
-	// it is what the user is shown.
-	if !strings.Contains(err.Error(), "recurring") {
-		t.Errorf("error %q does not explain what is unsupported", err)
-	}
-}
-
-// The same applies to an exception sent on its own.
-func TestPutRejectsALoneException(t *testing.T) {
-	lone := "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//t//EN\r\n" +
-		"BEGIN:VEVENT\r\nUID:s@x\r\nDTSTAMP:20260915T080000Z\r\nRECURRENCE-ID:20261013T090000Z\r\nDTSTART:20261013T140000Z\r\nEND:VEVENT\r\n" +
-		"END:VCALENDAR\r\n"
-
-	if err := checkSupported(calendarWith(t, lone)); err == nil {
-		t.Error("a lone recurrence exception was accepted")
-	}
-}
-
-// An ordinary recurring event is not an exception and must still go through.
-func TestPutAcceptsAPlainSeries(t *testing.T) {
-	series := "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//t//EN\r\n" +
-		"BEGIN:VEVENT\r\nUID:s@x\r\nDTSTAMP:20260915T080000Z\r\nDTSTART:20261006T090000Z\r\nRRULE:FREQ=WEEKLY\r\nEND:VEVENT\r\n" +
-		"END:VCALENDAR\r\n"
-
-	if err := checkSupported(calendarWith(t, series)); err != nil {
-		t.Errorf("a plain recurring event was rejected: %v", err)
 	}
 }
