@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"path"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -29,22 +30,45 @@ var methodsForCalendar = []string{http.MethodPut, http.MethodGet, http.MethodHea
 // ctagFunc returns the change token of the collection at a path.
 type ctagFunc func(ctx context.Context, path string) (string, error)
 
+// syncFunc answers a sync-collection report.
+type syncFunc func(ctx context.Context, path, token string, wantData bool) (syncResult, error)
+
+var (
+	// syncRequestPattern recognises a sync-collection report, which go-webdav
+	// would otherwise reject as an unknown kind of REPORT.
+	syncRequestPattern = regexp.MustCompile(`(?s)<([\w-]+:)?sync-collection\b`)
+
+	// syncTokenPattern extracts the client's token, which is absent on a
+	// first sync.
+	syncTokenPattern = regexp.MustCompile(`(?s)<([\w-]+:)?sync-token\b[^>]*>(.*?)</([\w-]+:)?sync-token>`)
+
+	// calendarDataPattern tells whether the client wants the events
+	// themselves or only their tags.
+	calendarDataPattern = regexp.MustCompile(`(?s)<([\w-]+:)?calendar-data\b`)
+)
+
 // supplied are properties go-webdav does not know, which carbonate answers
 // itself. Each is removed from the PROPFIND before go-webdav sees it —
 // asking for an unknown property earns a 404 propstat that would then have to
 // be unpicked — and the answer is added to the response afterwards.
 //
-// Only reports go-webdav actually handles are advertised. Claiming
-// sync-collection here would have clients ask for something that does not
-// work.
+// calendar-query and calendar-multiget are go-webdav's; sync-collection is
+// answered by serveSync below. Nothing is advertised that is not served.
 var supportedReportSet = `<supported-report-set xmlns="DAV:">` +
 	`<supported-report><report><calendar-query xmlns="urn:ietf:params:xml:ns:caldav"/></report></supported-report>` +
 	`<supported-report><report><calendar-multiget xmlns="urn:ietf:params:xml:ns:caldav"/></report></supported-report>` +
+	`<supported-report><report><sync-collection/></report></supported-report>` +
 	`</supported-report-set>`
 
 // compat corrects go-webdav's responses and supplies the properties it lacks.
-func compat(next http.Handler, ctag ctagFunc) http.Handler {
+func compat(next http.Handler, ctag ctagFunc, sync syncFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "REPORT" && sync != nil {
+			if handled := serveSync(w, r, sync); handled {
+				return
+			}
+		}
+
 		wantCTag, wantReports := false, false
 
 		if r.Method == "PROPFIND" && r.Body != nil {
@@ -89,6 +113,47 @@ var (
 
 	hrefPattern = regexp.MustCompile(`(?s)<([\w-]+:)?href\b[^>]*>(.*?)</([\w-]+:)?href>`)
 )
+
+// serveSync answers a sync-collection report, reporting whether it did.
+//
+// go-webdav 0.7.0 handles calendar-query and calendar-multiget and rejects
+// anything else, so this has to be intercepted before it gets there.
+func serveSync(w http.ResponseWriter, r *http.Request, sync syncFunc) bool {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		return false
+	}
+
+	// Put the body back for the handler behind us, which will need it if this
+	// is some other report.
+	r.Body = io.NopCloser(bytes.NewReader(body))
+
+	if !syncRequestPattern.Match(body) {
+		return false
+	}
+
+	token := ""
+	if m := syncTokenPattern.FindSubmatch(body); m != nil {
+		token = parseSyncToken(string(m[2]))
+	}
+
+	result, err := sync(r.Context(), r.URL.Path, token, calendarDataPattern.Match(body))
+	if err != nil {
+		// go-webdav keeps its error rendering to itself, so say it plainly.
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+
+		return true
+	}
+
+	answer := result.multistatus()
+
+	w.Header().Set("Content-Type", "text/xml; charset=utf-8")
+	w.Header().Set("Content-Length", strconv.Itoa(len(answer)))
+	w.WriteHeader(http.StatusMultiStatus)
+	w.Write([]byte(answer))
+
+	return true
+}
 
 // stripProp removes a named property from a PROPFIND body, reporting whether
 // it was there.

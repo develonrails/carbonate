@@ -186,7 +186,6 @@ Open, each with its reasoning in the issue:
 | [#1](https://github.com/develonrails/carbonate/issues/1) | Recurrence exceptions are probably mishandled |
 | [#2](https://github.com/develonrails/carbonate/issues/2) | Invitations are never sent to attendees |
 | [#4](https://github.com/develonrails/carbonate/issues/4) | Human verification (CAPTCHA) at login is not handled |
-| [#7](https://github.com/develonrails/carbonate/issues/7) | `sync-collection` REPORT is not supported |
 
 One is worth knowing before you rely on carbonate: an attendee is recorded but
 never told they were invited ([#2](https://github.com/develonrails/carbonate/issues/2)).

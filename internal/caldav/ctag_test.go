@@ -140,7 +140,7 @@ func TestCTagValueIsEscaped(t *testing.T) {
 	req := httptest.NewRequest("PROPFIND", "/caldav/principal/calendars/abc/", strings.NewReader(ctagRequest))
 	rec := httptest.NewRecorder()
 
-	compat(inner, func(context.Context, string) (string, error) { return `a<b&c"d`, nil }).ServeHTTP(rec, req)
+	compat(inner, func(context.Context, string) (string, error) { return `a<b&c"d`, nil }, nil).ServeHTTP(rec, req)
 
 	body, _ := io.ReadAll(rec.Result().Body)
 
@@ -153,9 +153,9 @@ func TestCTagValueIsEscaped(t *testing.T) {
 	}
 }
 
-// Advertising a report carbonate cannot serve would have clients ask for
-// something that does not work.
-func TestSupportedReportsAreOnlyTheRealOnes(t *testing.T) {
+// Everything advertised must be something carbonate actually serves: a client
+// that asks for a report it was promised and gets a rejection has no recourse.
+func TestSupportedReportsMatchWhatIsServed(t *testing.T) {
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/xml")
 		w.Write([]byte(twoResponses))
@@ -166,18 +166,14 @@ func TestSupportedReportsAreOnlyTheRealOnes(t *testing.T) {
 	req := httptest.NewRequest("PROPFIND", "/caldav/principal/calendars/abc/", strings.NewReader(request))
 	rec := httptest.NewRecorder()
 
-	compat(inner, nil).ServeHTTP(rec, req)
+	compat(inner, nil, nil).ServeHTTP(rec, req)
 
 	body, _ := io.ReadAll(rec.Result().Body)
 
-	for _, want := range []string{"calendar-query", "calendar-multiget"} {
+	for _, want := range []string{"calendar-query", "calendar-multiget", "sync-collection"} {
 		if !strings.Contains(string(body), want) {
 			t.Errorf("%s was not advertised:\n%s", want, body)
 		}
-	}
-
-	if strings.Contains(string(body), "sync-collection") {
-		t.Errorf("sync-collection was advertised but is not implemented:\n%s", body)
 	}
 }
 
@@ -197,7 +193,7 @@ func TestCompatSurvivesACTagError(t *testing.T) {
 	req := httptest.NewRequest("PROPFIND", "/caldav/principal/calendars/abc/", strings.NewReader(ctagRequest))
 	rec := httptest.NewRecorder()
 
-	compat(inner, failing).ServeHTTP(rec, req)
+	compat(inner, failing, nil).ServeHTTP(rec, req)
 
 	res := rec.Result()
 	defer res.Body.Close()
@@ -228,7 +224,7 @@ func TestCompatStripsTheRequestBeforeForwarding(t *testing.T) {
 	req := httptest.NewRequest("PROPFIND", "/caldav/principal/calendars/abc/", strings.NewReader(mixedRequest))
 	rec := httptest.NewRecorder()
 
-	compat(inner, func(context.Context, string) (string, error) { return "t", nil }).ServeHTTP(rec, req)
+	compat(inner, func(context.Context, string) (string, error) { return "t", nil }, nil).ServeHTTP(rec, req)
 
 	if strings.Contains(forwarded, "getctag") {
 		t.Errorf("getctag was forwarded to go-webdav:\n%s", forwarded)
@@ -251,7 +247,7 @@ func TestCompatDoesNotTouchOtherMethods(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPut, "/caldav/principal/calendars/abc/x.ics", strings.NewReader("BEGIN:VCALENDAR"))
 	rec := httptest.NewRecorder()
 
-	compat(inner, nil).ServeHTTP(rec, req)
+	compat(inner, nil, nil).ServeHTTP(rec, req)
 
 	if forwarded != "BEGIN:VCALENDAR" {
 		t.Errorf("a PUT body was rewritten: %q", forwarded)

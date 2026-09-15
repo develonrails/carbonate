@@ -52,6 +52,11 @@ type Backend struct {
 	mu     sync.RWMutex
 	tokens map[string]string
 	names  map[string]string
+
+	// uids remembers which UID each Proton event ID was served under, so that
+	// a deletion — which Proton reports by ID alone — can still be named to a
+	// client that knows the event by its path.
+	uids map[string]map[string]string
 }
 
 // New returns a backend reading and writing through store.
@@ -64,12 +69,13 @@ func New(store Store) *Backend {
 		cache:  cache.New[calendar.Event](),
 		tokens: make(map[string]string),
 		names:  make(map[string]string),
+		uids:   make(map[string]map[string]string),
 	}
 }
 
 // Handler returns an http.Handler serving CalDAV for this backend.
 func (b *Backend) Handler() http.Handler {
-	return compat(&caldav.Handler{Backend: b, Prefix: prefix}, b.ctag)
+	return compat(&caldav.Handler{Backend: b, Prefix: prefix}, b.ctag, b.sync)
 }
 
 // ctag returns a token that changes whenever anything in the calendar does.
@@ -296,6 +302,8 @@ func (b *Backend) ListCalendarObjects(ctx context.Context, p string, req *caldav
 	if err != nil {
 		return nil, err
 	}
+
+	b.remember(id, events)
 
 	segment := calendarSegment(p)
 	out := make([]caldav.CalendarObject, 0, len(events))

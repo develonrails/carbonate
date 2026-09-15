@@ -95,7 +95,7 @@ func TestCompatPassesResponsesThrough(t *testing.T) {
 	})
 
 	rec := httptest.NewRecorder()
-	compat(inner, nil).ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/x", nil))
+	compat(inner, nil, nil).ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/x", nil))
 
 	res := rec.Result()
 	defer res.Body.Close()
@@ -121,7 +121,7 @@ func TestCompatDefaultsToOK(t *testing.T) {
 	})
 
 	rec := httptest.NewRecorder()
-	compat(inner, nil).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/x", nil))
+	compat(inner, nil, nil).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/x", nil))
 
 	if rec.Result().StatusCode != http.StatusOK {
 		t.Errorf("status = %d, want 200", rec.Result().StatusCode)
@@ -136,7 +136,7 @@ func TestCompatRewritesXMLBody(t *testing.T) {
 	})
 
 	rec := httptest.NewRecorder()
-	compat(inner, nil).ServeHTTP(rec, httptest.NewRequest("PROPFIND", "/x", nil))
+	compat(inner, nil, nil).ServeHTTP(rec, httptest.NewRequest("PROPFIND", "/x", nil))
 
 	body, _ := io.ReadAll(rec.Result().Body)
 
@@ -155,7 +155,7 @@ func TestCompatLeavesNonXMLAlone(t *testing.T) {
 	})
 
 	rec := httptest.NewRecorder()
-	compat(inner, nil).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/x.ics", nil))
+	compat(inner, nil, nil).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/x.ics", nil))
 
 	body, _ := io.ReadAll(rec.Result().Body)
 	if string(body) != ics {
@@ -170,7 +170,7 @@ func TestCompatAddsPutToOptions(t *testing.T) {
 	})
 
 	rec := httptest.NewRecorder()
-	compat(inner, nil).ServeHTTP(rec, httptest.NewRequest(http.MethodOptions, "/x/", nil))
+	compat(inner, nil, nil).ServeHTTP(rec, httptest.NewRequest(http.MethodOptions, "/x/", nil))
 
 	if allow := rec.Result().Header.Get("Allow"); !strings.Contains(allow, "PUT") {
 		t.Errorf("Allow = %q, want it to include PUT", allow)

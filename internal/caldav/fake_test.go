@@ -23,6 +23,11 @@ type fakeStore struct {
 	put    []string
 	delete []string
 
+	// changes is what the fake reports as having moved since a cursor, keyed
+	// by that cursor; resyncFrom lists cursors it refuses to answer for.
+	changes    map[string][]string
+	resyncFrom map[string]bool
+
 	err error
 }
 
@@ -38,7 +43,9 @@ func newFake() *fakeStore {
 				Properties: []string{"UID:meeting@example.com", "DTSTART:20260920T090000Z", "SUMMARY:Meeting"},
 			}},
 		},
-		token: "token-1",
+		token:      "token-1",
+		changes:    make(map[string][]string),
+		resyncFrom: make(map[string]bool),
 	}
 }
 
@@ -118,6 +125,31 @@ func (f *fakeStore) Delete(_ context.Context, calendarID, uid string) (bool, err
 func (f *fakeStore) ChangeToken(context.Context, string) (string, error) {
 	f.tokenCalls++
 
+	if f.err != nil {
+		return "", f.err
+	}
+
+	return f.token, nil
+}
+
+func (f *fakeStore) Changes(_ context.Context, _ string, since string) ([]string, string, bool, error) {
+	if f.err != nil {
+		return nil, "", false, f.err
+	}
+
+	if since == "" || f.resyncFrom[since] {
+		return nil, "", true, nil
+	}
+
+	ids, ok := f.changes[since]
+	if !ok {
+		return nil, "", true, nil
+	}
+
+	return ids, f.token, false, nil
+}
+
+func (f *fakeStore) Cursor(context.Context, string) (string, error) {
 	if f.err != nil {
 		return "", f.err
 	}

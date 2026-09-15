@@ -124,10 +124,35 @@ corrects both on the way out rather than forking the library:
   be shown an empty address book, so `QueryAddressObjects` returns everything
   in that case rather than calling the matcher.
 
-- **`supported-report-set` answers 404.** `compat.go` supplies it, listing
-  `calendar-query` and `calendar-multiget` — the two go-webdav actually
-  handles. Advertising `sync-collection` as well would have clients ask for
-  something that does not work.
+- **`supported-report-set` answers 404**, and **`sync-collection` is not
+  handled at all**. `compat.go` supplies the first and answers the second, so
+  nothing is advertised that is not served.
+
+### sync-collection
+
+With a ctag a client knows *that* something changed; with sync-collection it
+learns *what*, and fetches only that.
+
+Proton's calendar event loop provides the deltas:
+`GET /calendar/v1/{id}/modelevents/{cursor}` returns the events that moved,
+a new cursor, `More` for paging and `Refresh` for "give up and read
+everything".
+
+Three things are not obvious:
+
+- **The loop's `latest` ID is not a consumed cursor.** Handing it out as a
+  sync token makes the next delta repeat whatever change produced it, so a
+  client would refetch forever. A token is obtained by reading the loop *at*
+  `latest` and taking the cursor that comes back.
+- **The action codes are ignored.** Proton says what happened to each event,
+  but carbonate looks the ID up in the current state instead: still there
+  means changed, gone means removed. That needs no assumption about what the
+  codes mean and cannot disagree with what a read would show.
+- **A removed event is named by Proton ID alone**, while the client knows it
+  by a path built from the iCalendar UID — which has gone with the event. The
+  mapping is therefore recorded on every read. If a deletion arrives for
+  something this process never saw, the client is told to read everything
+  rather than left holding an event that no longer exists.
 
 ### The ctag
 
