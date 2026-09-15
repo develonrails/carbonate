@@ -29,21 +29,32 @@ var methodsForCalendar = []string{http.MethodPut, http.MethodGet, http.MethodHea
 // ctagFunc returns the change token of the collection at a path.
 type ctagFunc func(ctx context.Context, path string) (string, error)
 
+// supplied are properties go-webdav does not know, which carbonate answers
+// itself. Each is removed from the PROPFIND before go-webdav sees it —
+// asking for an unknown property earns a 404 propstat that would then have to
+// be unpicked — and the answer is added to the response afterwards.
+//
+// Only reports go-webdav actually handles are advertised. Claiming
+// sync-collection here would have clients ask for something that does not
+// work.
+var supportedReportSet = `<supported-report-set xmlns="DAV:">` +
+	`<supported-report><report><calendar-query xmlns="urn:ietf:params:xml:ns:caldav"/></report></supported-report>` +
+	`<supported-report><report><calendar-multiget xmlns="urn:ietf:params:xml:ns:caldav"/></report></supported-report>` +
+	`</supported-report-set>`
+
 // compat corrects go-webdav's responses and supplies the properties it lacks.
 func compat(next http.Handler, ctag ctagFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		wantCTag := false
+		wantCTag, wantReports := false, false
 
-		// go-webdav has no getctag, so the request is answered for it here.
-		// Asking go-webdav for a property it does not know would earn a 404
-		// propstat that then has to be unpicked, so the name is removed from
-		// the request instead and the answer added to the response.
 		if r.Method == "PROPFIND" && r.Body != nil {
 			body, err := io.ReadAll(r.Body)
 			if err == nil {
 				var stripped []byte
 
-				stripped, wantCTag = stripCTag(body)
+				stripped, wantCTag = stripProp(body, "getctag")
+				stripped, wantReports = stripProp(stripped, "supported-report-set")
+				stripped = fillEmptyProp(stripped)
 
 				r.Body = io.NopCloser(bytes.NewReader(stripped))
 				r.ContentLength = int64(len(stripped))
@@ -54,9 +65,14 @@ func compat(next http.Handler, ctag ctagFunc) http.Handler {
 
 		next.ServeHTTP(rec, r)
 
+		if wantReports {
+			rec.body = *bytes.NewBuffer(injectProp(rec.body.Bytes(), r.URL.Path, supportedReportSet))
+		}
+
 		if wantCTag && ctag != nil {
 			if value, err := ctag(r.Context(), r.URL.Path); err == nil {
-				rec.body = *bytes.NewBuffer(injectCTag(rec.body.Bytes(), r.URL.Path, value))
+				rec.body = *bytes.NewBuffer(injectProp(rec.body.Bytes(), r.URL.Path,
+					fmt.Sprintf(`<getctag xmlns="http://calendarserver.org/ns/">%s</getctag>`, html.EscapeString(value))))
 			}
 		}
 
@@ -65,10 +81,6 @@ func compat(next http.Handler, ctag ctagFunc) http.Handler {
 }
 
 var (
-	// ctagPattern matches a getctag element, paired or self-closing, with or
-	// without a namespace prefix.
-	ctagPattern = regexp.MustCompile(`(?s)<([\w-]+:)?getctag\b[^>]*(/>|>.*?</([\w-]+:)?getctag>)`)
-
 	// emptyPropPattern matches a prop element left with no children.
 	emptyPropPattern = regexp.MustCompile(`(?s)<([\w-]+:)?prop\b[^>]*>\s*</([\w-]+:)?prop>`)
 
@@ -78,30 +90,33 @@ var (
 	hrefPattern = regexp.MustCompile(`(?s)<([\w-]+:)?href\b[^>]*>(.*?)</([\w-]+:)?href>`)
 )
 
-// stripCTag removes getctag from a PROPFIND body, reporting whether it was
-// there. A prop element left empty gets resourcetype instead, since a request
-// for nothing at all is not one go-webdav will answer.
-func stripCTag(body []byte) ([]byte, bool) {
-	if !ctagPattern.Match(body) {
+// stripProp removes a named property from a PROPFIND body, reporting whether
+// it was there.
+func stripProp(body []byte, name string) ([]byte, bool) {
+	pattern := regexp.MustCompile(`(?s)<([\w-]+:)?` + regexp.QuoteMeta(name) + `\b[^>]*(/>|>.*?</([\w-]+:)?` + regexp.QuoteMeta(name) + `>)`)
+
+	if !pattern.Match(body) {
 		return body, false
 	}
 
-	out := ctagPattern.ReplaceAll(body, nil)
+	return pattern.ReplaceAll(body, nil), true
+}
 
-	out = emptyPropPattern.ReplaceAllFunc(out, func(match []byte) []byte {
+// fillEmptyProp puts something harmless into a prop element the stripping
+// emptied, since a request for nothing at all is not one go-webdav answers.
+func fillEmptyProp(body []byte) []byte {
+	return emptyPropPattern.ReplaceAllFunc(body, func(match []byte) []byte {
 		i := bytes.Index(match, []byte(">"))
 
 		return append(append(append([]byte{}, match[:i+1]...), []byte(`<resourcetype xmlns="DAV:"/>`)...), match[i+1:]...)
 	})
-
-	return out, true
 }
 
-// injectCTag adds the getctag property to the response describing collection.
+// injectProp adds a property to the response describing collection.
 //
-// Only the collection carries a ctag; the events inside it must be left alone,
-// or a client would treat each one as a collection that never changes.
-func injectCTag(body []byte, collection, value string) []byte {
+// Only the collection is touched; the events inside it must be left alone, or
+// a client would treat each one as a collection of its own.
+func injectProp(body []byte, collection, property string) []byte {
 	want := strings.TrimSuffix(path.Clean(collection), "/")
 
 	return responsePattern.ReplaceAllFunc(body, func(response []byte) []byte {
@@ -115,9 +130,7 @@ func injectCTag(body []byte, collection, value string) []byte {
 			return response
 		}
 
-		propstat := fmt.Sprintf(
-			`<propstat xmlns="DAV:"><prop xmlns="DAV:"><getctag xmlns="http://calendarserver.org/ns/">%s</getctag></prop><status>HTTP/1.1 200 OK</status></propstat>`,
-			html.EscapeString(value))
+		propstat := `<propstat xmlns="DAV:"><prop xmlns="DAV:">` + property + `</prop><status>HTTP/1.1 200 OK</status></propstat>`
 
 		i := bytes.LastIndex(response, []byte("</"))
 		if i < 0 {

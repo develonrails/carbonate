@@ -124,8 +124,10 @@ corrects both on the way out rather than forking the library:
   be shown an empty address book, so `QueryAddressObjects` returns everything
   in that case rather than calling the matcher.
 
-`supported-report-set` also answers 404, which is worth revisiting if a client
-fails to discover `calendar-query` or `sync-collection`.
+- **`supported-report-set` answers 404.** `compat.go` supplies it, listing
+  `calendar-query` and `calendar-multiget` — the two go-webdav actually
+  handles. Advertising `sync-collection` as well would have clients ask for
+  something that does not work.
 
 ### The ctag
 

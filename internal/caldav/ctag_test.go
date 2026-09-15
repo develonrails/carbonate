@@ -17,7 +17,7 @@ const mixedRequest = `<?xml version="1.0"?>
 <d:propfind xmlns:d="DAV:" xmlns:cs="http://calendarserver.org/ns/"><d:prop><d:displayname/><cs:getctag/><d:resourcetype/></d:prop></d:propfind>`
 
 func TestStripCTagRemovesTheProperty(t *testing.T) {
-	out, found := stripCTag([]byte(mixedRequest))
+	out, found := stripProp([]byte(mixedRequest), "getctag")
 
 	if !found {
 		t.Fatal("getctag was not detected")
@@ -38,11 +38,13 @@ func TestStripCTagRemovesTheProperty(t *testing.T) {
 // go-webdav will not answer a request for no properties at all, so a prop
 // element emptied by the strip needs something harmless putting back.
 func TestStripCTagFillsAnEmptiedProp(t *testing.T) {
-	out, found := stripCTag([]byte(ctagRequest))
+	out, found := stripProp([]byte(ctagRequest), "getctag")
 
 	if !found {
 		t.Fatal("getctag was not detected")
 	}
+
+	out = fillEmptyProp(out)
 
 	if !strings.Contains(string(out), "resourcetype") {
 		t.Errorf("emptied prop was not given a replacement property:\n%s", out)
@@ -52,7 +54,7 @@ func TestStripCTagFillsAnEmptiedProp(t *testing.T) {
 func TestStripCTagLeavesOtherRequestsAlone(t *testing.T) {
 	in := `<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:getetag/></d:prop></d:propfind>`
 
-	out, found := stripCTag([]byte(in))
+	out, found := stripProp([]byte(in), "getctag")
 
 	if found {
 		t.Error("getctag was reported in a request that does not ask for it")
@@ -66,7 +68,7 @@ func TestStripCTagLeavesOtherRequestsAlone(t *testing.T) {
 // getetag must not be mistaken for getctag; they differ by one letter and one
 // would silently shadow the other.
 func TestStripCTagDoesNotMatchGetETag(t *testing.T) {
-	if _, found := stripCTag([]byte(`<d:prop><d:getetag/></d:prop>`)); found {
+	if _, found := stripProp([]byte(`<d:prop><d:getetag/></d:prop>`), "getctag"); found {
 		t.Error("getetag was treated as getctag")
 	}
 }
@@ -82,7 +84,7 @@ const twoResponses = `<?xml version="1.0" encoding="UTF-8"?>` +
 	`</multistatus>`
 
 func TestInjectCTagAddsItToTheCollection(t *testing.T) {
-	got := string(injectCTag([]byte(twoResponses), "/caldav/principal/calendars/abc/", "token-123"))
+	got := string(injectProp([]byte(twoResponses), "/caldav/principal/calendars/abc/", `<getctag xmlns="http://calendarserver.org/ns/">token-123</getctag>`))
 
 	if !strings.Contains(got, `<getctag xmlns="http://calendarserver.org/ns/">token-123</getctag>`) {
 		t.Errorf("ctag was not injected:\n%s", got)
@@ -92,7 +94,7 @@ func TestInjectCTagAddsItToTheCollection(t *testing.T) {
 // Only the collection has a ctag. Putting one on each event would have a
 // client believe every event is an unchanging collection of its own.
 func TestInjectCTagLeavesMembersAlone(t *testing.T) {
-	got := string(injectCTag([]byte(twoResponses), "/caldav/principal/calendars/abc/", "token-123"))
+	got := string(injectProp([]byte(twoResponses), "/caldav/principal/calendars/abc/", `<getctag xmlns="http://calendarserver.org/ns/">token-123</getctag>`))
 
 	// Count opening tags: the closing tag repeats the name.
 	if n := strings.Count(got, "<getctag"); n != 1 {
@@ -110,7 +112,7 @@ func TestInjectCTagMatchesRegardlessOfTrailingSlash(t *testing.T) {
 		"/caldav/principal/calendars/abc/",
 		"/caldav/principal/calendars/abc",
 	} {
-		got := string(injectCTag([]byte(twoResponses), p, "token-123"))
+		got := string(injectProp([]byte(twoResponses), p, `<getctag xmlns="http://calendarserver.org/ns/">token-123</getctag>`))
 
 		if !strings.Contains(got, "token-123") {
 			t.Errorf("no ctag injected for path %q", p)
@@ -119,7 +121,7 @@ func TestInjectCTagMatchesRegardlessOfTrailingSlash(t *testing.T) {
 }
 
 func TestInjectCTagIgnoresAForeignPath(t *testing.T) {
-	got := string(injectCTag([]byte(twoResponses), "/caldav/principal/calendars/other/", "token-123"))
+	got := string(injectProp([]byte(twoResponses), "/caldav/principal/calendars/other/", `<getctag xmlns="http://calendarserver.org/ns/">token-123</getctag>`))
 
 	if strings.Contains(got, "<getctag") {
 		t.Errorf("a ctag was injected into an unrelated collection:\n%s", got)
@@ -127,15 +129,55 @@ func TestInjectCTagIgnoresAForeignPath(t *testing.T) {
 }
 
 // A token is opaque and may contain characters that would break the XML.
-func TestInjectCTagEscapesTheValue(t *testing.T) {
-	got := string(injectCTag([]byte(twoResponses), "/caldav/principal/calendars/abc/", `a<b&c"d`))
+// A change token is opaque and may contain characters that would break the
+// XML around it.
+func TestCTagValueIsEscaped(t *testing.T) {
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/xml")
+		w.Write([]byte(twoResponses))
+	})
 
-	if strings.Contains(got, "a<b&c") {
-		t.Errorf("the token was not escaped:\n%s", got)
+	req := httptest.NewRequest("PROPFIND", "/caldav/principal/calendars/abc/", strings.NewReader(ctagRequest))
+	rec := httptest.NewRecorder()
+
+	compat(inner, func(context.Context, string) (string, error) { return `a<b&c"d`, nil }).ServeHTTP(rec, req)
+
+	body, _ := io.ReadAll(rec.Result().Body)
+
+	if strings.Contains(string(body), `a<b&c`) {
+		t.Errorf("the token was not escaped:\n%s", body)
 	}
 
-	if !strings.Contains(got, "&lt;") || !strings.Contains(got, "&amp;") {
-		t.Errorf("expected escaped entities in:\n%s", got)
+	if !strings.Contains(string(body), "&lt;") {
+		t.Errorf("expected escaped entities in:\n%s", body)
+	}
+}
+
+// Advertising a report carbonate cannot serve would have clients ask for
+// something that does not work.
+func TestSupportedReportsAreOnlyTheRealOnes(t *testing.T) {
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/xml")
+		w.Write([]byte(twoResponses))
+	})
+
+	request := `<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:supported-report-set/></d:prop></d:propfind>`
+
+	req := httptest.NewRequest("PROPFIND", "/caldav/principal/calendars/abc/", strings.NewReader(request))
+	rec := httptest.NewRecorder()
+
+	compat(inner, nil).ServeHTTP(rec, req)
+
+	body, _ := io.ReadAll(rec.Result().Body)
+
+	for _, want := range []string{"calendar-query", "calendar-multiget"} {
+		if !strings.Contains(string(body), want) {
+			t.Errorf("%s was not advertised:\n%s", want, body)
+		}
+	}
+
+	if strings.Contains(string(body), "sync-collection") {
+		t.Errorf("sync-collection was advertised but is not implemented:\n%s", body)
 	}
 }
 
