@@ -137,9 +137,12 @@ no C toolchain at all.
 make gui
 ```
 
-It needs `gtk4` and `gobject-introspection` development headers. On an
-immutable host such as Fedora Silverblue there are none, and no C compiler
-either; build it in a container instead:
+It needs `gtk4` and `gobject-introspection` development headers, and a **recent
+GLib** — gotk4 calls functions that Debian and Ubuntu packages do not yet
+provide, so the build fails there on missing symbols. Fedora 44 is new enough.
+
+On an immutable host such as Fedora Silverblue there are no headers and no C
+compiler either; build it in a container:
 
 ```sh
 toolbox create carbonate-build

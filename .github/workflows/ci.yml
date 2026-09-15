@@ -32,21 +32,19 @@ jobs:
       - name: Build
         run: go build ./cmd/carbonate
 
+  # The window is optional, but it should not be allowed to rot.
+  #
+  # Built in a Fedora container rather than on the runner directly: gotk4
+  # calls GLib functions that Ubuntu's packages are too old to provide, so the
+  # build fails there on missing symbols rather than on anything we wrote.
   gui:
     runs-on: ubuntu-latest
+    container: fedora:44
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      # The window is optional, but it should not be allowed to rot.
-      - name: Install GTK
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgtk-4-dev libgirepository1.0-dev
+      - name: Install GTK and Go
+        run: dnf install -y golang gcc glibc-devel gtk4-devel gobject-introspection-devel
 
       - name: Build the GUI
         run: CGO_ENABLED=1 go build -tags gtk ./cmd/carbonate-gui
