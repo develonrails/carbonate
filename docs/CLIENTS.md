@@ -17,6 +17,26 @@ configured with the old one stops working. After the first login, use:
 carbonate auth <username> -keep-bridge-password
 ```
 
+## One process at a time
+
+Proton rotates the refresh token on every use and discards the old one, so two
+carbonate processes sharing a session would each invalidate the other. A
+session is therefore locked while it is in use, and a second process is turned
+away:
+
+```
+carbonate is already running and using this session; stop it first
+```
+
+Stop the server, or point the other command at a different session file with
+`-session`.
+
+`carbonate sessions` shows what is open on the Proton side. Proton allows a
+limited number and takes access away from older ones rather than refusing new
+ones, so requests eventually fail for reasons that look unrelated;
+`-revoke-stale` ends carbonate's own earlier sessions and leaves other clients
+alone.
+
 ## Two-password accounts
 
 Proton accounts can keep two passwords apart:

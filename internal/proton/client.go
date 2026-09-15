@@ -84,6 +84,8 @@ type Conn struct {
 	// fires the auth handler that updates the credentials above. Held as a
 	// function so the retry can be exercised without a live client.
 	refresh func(ctx context.Context) error
+
+	onClose []func()
 }
 
 // setCredentials records the tokens used for raw requests.
@@ -244,6 +246,27 @@ func explainScope(err error) error {
 	return fmt.Errorf("%w (%v)", ErrSessionLostScope, err)
 }
 
+// UID identifies the session this connection is using.
+func (c *Conn) UID() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	return c.uid
+}
+
+// Sessions lists the Proton sessions open for this account.
+func (c *Conn) Sessions(ctx context.Context) ([]api.AuthSession, error) {
+	return c.Client.AuthSessions(ctx)
+}
+
+// RevokeOtherSessions ends every session except this one.
+//
+// This logs out other clients too — the web app, a phone — so it is never
+// done on carbonate's own initiative.
+func (c *Conn) RevokeOtherSessions(ctx context.Context) error {
+	return c.Client.AuthRevokeAll(ctx)
+}
+
 // RevokeSession ends a Proton session by its UID.
 //
 // Used to retire the session being replaced at login: Proton keeps a limited
@@ -352,7 +375,18 @@ func (c *Conn) CalendarKeys(ctx context.Context, calendarID string) (*CalendarKe
 	return &CalendarKeys{MemberID: member.ID, Email: addr.Email, CalKR: calKR, AddrKR: addrKR}, nil
 }
 
-// Close releases the client and its underlying manager.
+// OnClose registers work to run when the connection is closed, so that a
+// caller holding a resource for the connection's lifetime can let it go
+// without tracking the connection itself.
+func (c *Conn) OnClose(fn func()) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.onClose = append(c.onClose, fn)
+}
+
+// Close releases the client, its underlying manager, and anything registered
+// with OnClose.
 func (c *Conn) Close() {
 	if c.Client != nil {
 		c.Client.Close()
@@ -360,6 +394,15 @@ func (c *Conn) Close() {
 
 	if c.Manager != nil {
 		c.Manager.Close()
+	}
+
+	c.mu.Lock()
+	handlers := c.onClose
+	c.onClose = nil
+	c.mu.Unlock()
+
+	for _, fn := range handlers {
+		fn()
 	}
 }
 

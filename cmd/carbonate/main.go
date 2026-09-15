@@ -56,6 +56,8 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 		return cmdEvent(ctx, args[1:], out)
 	case "contacts":
 		return cmdContacts(ctx, args[1:], out)
+	case "sessions":
+		return cmdSessions(ctx, args[1:], out)
 	case "version":
 		fmt.Fprintln(out, version)
 		return nil
@@ -78,6 +80,7 @@ Usage:
   carbonate event put         create or replace an event from iCalendar on stdin
   carbonate event delete      delete an event by its iCalendar UID
   carbonate contacts          list contacts, optionally as vCards
+  carbonate sessions          list Proton sessions; -revoke-others to clear them
   carbonate version           print the version
 
 Unattended login reads answers from stdin, one line at a time, in the order
@@ -130,14 +133,21 @@ func cmdAuth(ctx context.Context, args []string, out io.Writer) error {
 		return err
 	}
 
-	sess, err := proton.Login(ctx, username, loginPassword, p)
+	// Logging in again would otherwise mint a new bridge password and break
+	// every client already configured with the old one.
+	bridgePassword, reused, err := bridgePasswordForAuth(*keepBridgePassword)
 	if err != nil {
 		return err
 	}
 
-	// Logging in again would otherwise mint a new bridge password and break
-	// every client already configured with the old one.
-	bridgePassword, reused, err := bridgePasswordForAuth(*keepBridgePassword)
+	// Logging in rewrites the session, so no other process may be holding it.
+	guard, err := lockSession(sessionPath)
+	if err != nil {
+		return err
+	}
+	defer guard.Release()
+
+	sess, err := proton.Login(ctx, username, loginPassword, p)
 	if err != nil {
 		return err
 	}
@@ -332,12 +342,39 @@ func bridgePassword() (string, error) {
 }
 
 func resume(ctx context.Context, sessionPath, password string) (*proton.Conn, error) {
+	guard, err := lockSession(sessionPath)
+	if err != nil {
+		return nil, err
+	}
+
 	sess, err := session.Load(sessionPath, password)
 	if err != nil {
+		guard.Release()
+
 		return nil, err
 	}
 
 	store := &sessionStore{path: sessionPath, password: password, sess: sess}
 
-	return proton.Resume(ctx, sess, store.persist)
+	conn, err := proton.Resume(ctx, sess, store.persist)
+	if err != nil {
+		guard.Release()
+
+		return nil, err
+	}
+
+	conn.OnClose(func() { guard.Release() })
+
+	return conn, nil
+}
+
+// lockSession claims the session for this process, explaining the refusal in
+// terms of what the user can see rather than of file locks.
+func lockSession(path string) (*session.Guard, error) {
+	guard, err := session.Lock(path)
+	if errors.Is(err, session.ErrLocked) {
+		return nil, errors.New("carbonate is already running and using this session; stop it first, or point this command at another session with -session")
+	}
+
+	return guard, err
 }
