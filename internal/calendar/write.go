@@ -280,6 +280,8 @@ func buildEvent(event *ical.Event, keys *proton.CalendarKeys, existing *api.Cale
 		return nil, err
 	}
 
+	ensureOrganizer(event, keys.Email)
+
 	data := &eventData{Permissions: 1, IsOrganizer: 1}
 
 	// Properties we do not recognise are encrypted rather than published:
@@ -390,6 +392,25 @@ func buildAttendees(event *ical.Event, keys *proton.CalendarKeys, newPacket, old
 		Data:      base64.StdEncoding.EncodeToString(encrypted),
 		Signature: signature,
 	}}, clear, nil
+}
+
+// ensureOrganizer names us as organiser when the event invites people and the
+// client did not say who is hosting.
+//
+// Proton refuses such an event outright — "Shared event has attendees but does
+// not have an organizer" — and a client that omits it would otherwise get an
+// error it cannot act on. We are writing to our own calendar, so we are the
+// organiser.
+func ensureOrganizer(event *ical.Event, email string) {
+	if len(event.Props["ATTENDEE"]) == 0 || email == "" {
+		return
+	}
+
+	if p := event.Props.Get("ORGANIZER"); p != nil && strings.TrimSpace(p.Value) != "" {
+		return
+	}
+
+	event.Props.Set(&ical.Prop{Name: "ORGANIZER", Value: "mailto:" + email})
 }
 
 // attendeeToken identifies an attendee without naming them.

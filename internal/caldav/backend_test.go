@@ -1,6 +1,7 @@
 package caldav
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -141,5 +142,57 @@ func TestETagTracksModification(t *testing.T) {
 
 	if etag(base) != etag(base) {
 		t.Error("ETag is not stable")
+	}
+}
+
+func TestPrincipalAndHomeSet(t *testing.T) {
+	b := newBackend()
+
+	principal, err := b.CurrentUserPrincipal(context.Background())
+	if err != nil {
+		t.Fatalf("CurrentUserPrincipal: %v", err)
+	}
+
+	if principal != principalPath {
+		t.Errorf("principal = %q, want %q", principal, principalPath)
+	}
+
+	home, err := b.CalendarHomeSetPath(context.Background())
+	if err != nil {
+		t.Fatalf("CalendarHomeSetPath: %v", err)
+	}
+
+	if home != homeSetPath {
+		t.Errorf("home set = %q, want %q", home, homeSetPath)
+	}
+}
+
+// Calendars are made in Proton, not through the bridge. Refusing plainly beats
+// accepting and quietly doing nothing.
+func TestCalendarCreationIsRefused(t *testing.T) {
+	if err := newBackend().CreateCalendar(context.Background(), nil); err == nil {
+		t.Error("creating a calendar was allowed")
+	}
+}
+
+// go-webdav infers a resource's kind from path depth below the prefix, so the
+// layout must not drift: principal 1, home set 2, calendar 3, event 4.
+func TestPathDepths(t *testing.T) {
+	for path, want := range map[string]int{
+		principalPath: 1,
+		homeSetPath:   2,
+	} {
+		trimmed := path[len(prefix):]
+
+		got := 0
+		for i := 1; i < len(trimmed); i++ {
+			if trimmed[i] == '/' {
+				got++
+			}
+		}
+
+		if got != want {
+			t.Errorf("%s has depth %d below the prefix, want %d", path, got, want)
+		}
 	}
 }

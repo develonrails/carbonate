@@ -68,7 +68,33 @@ func New(conn *proton.Conn, ttl time.Duration) *Backend {
 
 // Handler returns an http.Handler serving CalDAV for this backend.
 func (b *Backend) Handler() http.Handler {
-	return compat(&caldav.Handler{Backend: b, Prefix: prefix})
+	return compat(&caldav.Handler{Backend: b, Prefix: prefix}, b.ctag)
+}
+
+// ctag returns a token that changes whenever anything in the calendar does.
+//
+// Proton's calendar event loop keeps exactly such a token, and fetching it is
+// one cheap request — which is the point: a ctag computed from the events
+// themselves would mean listing them, the very work it exists to avoid.
+func (b *Backend) ctag(ctx context.Context, p string) (string, error) {
+	id, err := b.calendarID(ctx, p)
+	if err != nil {
+		return "", err
+	}
+
+	var res struct {
+		CalendarModelEventID string
+	}
+
+	if err := b.conn.Get(ctx, "/calendar/v1/"+id+"/modelevents/latest", &res); err != nil {
+		return "", err
+	}
+
+	if res.CalendarModelEventID == "" {
+		return "", fmt.Errorf("calendar %s reported no change token", id)
+	}
+
+	return res.CalendarModelEventID, nil
 }
 
 func (b *Backend) CurrentUserPrincipal(ctx context.Context) (string, error) {

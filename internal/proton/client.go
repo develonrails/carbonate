@@ -78,6 +78,11 @@ type Conn struct {
 	mu          sync.RWMutex
 	uid         string
 	accessToken string
+
+	// refresh provokes go-proton-api into renewing the access token, which
+	// fires the auth handler that updates the credentials above. Held as a
+	// function so the retry can be exercised without a live client.
+	refresh func(ctx context.Context) error
 }
 
 // setCredentials records the tokens used for raw requests.
@@ -119,7 +124,11 @@ func (c *Conn) do(ctx context.Context, method, path string, body, out any) error
 	// Raw requests carry a snapshot of the access token, and Proton expires
 	// them. go-proton-api refreshes on its own 401s, so provoke one cheaply:
 	// it fires the auth handler, which updates our copy. Then try once more.
-	if _, err := c.Client.GetUser(ctx); err != nil {
+	if c.refresh == nil {
+		return fmt.Errorf("requesting %s: unauthorised, and there is no way to refresh the token", path)
+	}
+
+	if err := c.refresh(ctx); err != nil {
 		return fmt.Errorf("refreshing expired token: %w", err)
 	}
 
@@ -243,6 +252,10 @@ type CalendarKeys struct {
 	// MemberID identifies our membership. Writes are attributed to it.
 	MemberID string
 
+	// Email is the address that membership belongs to. Proton requires an
+	// event with attendees to name an organiser, and this is ours.
+	Email string
+
 	// CalKR decrypts and encrypts event content.
 	CalKR *crypto.KeyRing
 
@@ -308,7 +321,7 @@ func (c *Conn) CalendarKeys(ctx context.Context, calendarID string) (*CalendarKe
 		return nil, fmt.Errorf("unlocking calendar keys: %w", err)
 	}
 
-	return &CalendarKeys{MemberID: member.ID, CalKR: calKR, AddrKR: addrKR}, nil
+	return &CalendarKeys{MemberID: member.ID, Email: addr.Email, CalKR: calKR, AddrKR: addrKR}, nil
 }
 
 // Close releases the client and its underlying manager.
@@ -424,6 +437,14 @@ func Resume(ctx context.Context, s *session.Session, persist PersistFunc) (*Conn
 
 	conn := &Conn{Manager: m, Client: c}
 	conn.setCredentials(auth.UID, auth.AccessToken)
+
+	// Any authenticated call will do: go-proton-api renews the token when it
+	// meets a 401 of its own, and the auth handler below records the result.
+	conn.refresh = func(ctx context.Context) error {
+		_, err := c.GetUser(ctx)
+
+		return err
+	}
 
 	c.AddAuthHandler(func(a api.Auth) {
 		conn.setCredentials(a.UID, a.AccessToken)

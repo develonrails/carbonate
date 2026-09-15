@@ -2,7 +2,12 @@ package caldav
 
 import (
 	"bytes"
+	"context"
+	"fmt"
+	"html"
+	"io"
 	"net/http"
+	"path"
 	"regexp"
 	"strings"
 )
@@ -21,13 +26,105 @@ var childPattern = regexp.MustCompile(`(?s)<([\w-]+)([^>/]*)>\s*</[\w-]+>|<([\w-
 // omits PUT, and a client reading the Allow header concludes it cannot write.
 var methodsForCalendar = []string{http.MethodPut, http.MethodGet, http.MethodHead}
 
-// compat corrects go-webdav's responses.
-func compat(next http.Handler) http.Handler {
+// ctagFunc returns the change token of the collection at a path.
+type ctagFunc func(ctx context.Context, path string) (string, error)
+
+// compat corrects go-webdav's responses and supplies the properties it lacks.
+func compat(next http.Handler, ctag ctagFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		wantCTag := false
+
+		// go-webdav has no getctag, so the request is answered for it here.
+		// Asking go-webdav for a property it does not know would earn a 404
+		// propstat that then has to be unpicked, so the name is removed from
+		// the request instead and the answer added to the response.
+		if r.Method == "PROPFIND" && r.Body != nil {
+			body, err := io.ReadAll(r.Body)
+			if err == nil {
+				var stripped []byte
+
+				stripped, wantCTag = stripCTag(body)
+
+				r.Body = io.NopCloser(bytes.NewReader(stripped))
+				r.ContentLength = int64(len(stripped))
+			}
+		}
+
 		rec := &recorder{ResponseWriter: w, method: r.Method}
 
 		next.ServeHTTP(rec, r)
+
+		if wantCTag && ctag != nil {
+			if value, err := ctag(r.Context(), r.URL.Path); err == nil {
+				rec.body = *bytes.NewBuffer(injectCTag(rec.body.Bytes(), r.URL.Path, value))
+			}
+		}
+
 		rec.flush()
+	})
+}
+
+var (
+	// ctagPattern matches a getctag element, paired or self-closing, with or
+	// without a namespace prefix.
+	ctagPattern = regexp.MustCompile(`(?s)<([\w-]+:)?getctag\b[^>]*(/>|>.*?</([\w-]+:)?getctag>)`)
+
+	// emptyPropPattern matches a prop element left with no children.
+	emptyPropPattern = regexp.MustCompile(`(?s)<([\w-]+:)?prop\b[^>]*>\s*</([\w-]+:)?prop>`)
+
+	// responsePattern matches one response element of a multistatus.
+	responsePattern = regexp.MustCompile(`(?s)<([\w-]+:)?response\b[^>]*>.*?</([\w-]+:)?response>`)
+
+	hrefPattern = regexp.MustCompile(`(?s)<([\w-]+:)?href\b[^>]*>(.*?)</([\w-]+:)?href>`)
+)
+
+// stripCTag removes getctag from a PROPFIND body, reporting whether it was
+// there. A prop element left empty gets resourcetype instead, since a request
+// for nothing at all is not one go-webdav will answer.
+func stripCTag(body []byte) ([]byte, bool) {
+	if !ctagPattern.Match(body) {
+		return body, false
+	}
+
+	out := ctagPattern.ReplaceAll(body, nil)
+
+	out = emptyPropPattern.ReplaceAllFunc(out, func(match []byte) []byte {
+		i := bytes.Index(match, []byte(">"))
+
+		return append(append(append([]byte{}, match[:i+1]...), []byte(`<resourcetype xmlns="DAV:"/>`)...), match[i+1:]...)
+	})
+
+	return out, true
+}
+
+// injectCTag adds the getctag property to the response describing collection.
+//
+// Only the collection carries a ctag; the events inside it must be left alone,
+// or a client would treat each one as a collection that never changes.
+func injectCTag(body []byte, collection, value string) []byte {
+	want := strings.TrimSuffix(path.Clean(collection), "/")
+
+	return responsePattern.ReplaceAllFunc(body, func(response []byte) []byte {
+		href := hrefPattern.FindSubmatch(response)
+		if href == nil {
+			return response
+		}
+
+		got := strings.TrimSuffix(path.Clean(html.UnescapeString(string(href[2]))), "/")
+		if got != want {
+			return response
+		}
+
+		propstat := fmt.Sprintf(
+			`<propstat xmlns="DAV:"><prop xmlns="DAV:"><getctag xmlns="http://calendarserver.org/ns/">%s</getctag></prop><status>HTTP/1.1 200 OK</status></propstat>`,
+			html.EscapeString(value))
+
+		i := bytes.LastIndex(response, []byte("</"))
+		if i < 0 {
+			return response
+		}
+
+		return append(append(append([]byte{}, response[:i]...), []byte(propstat)...), response[i:]...)
 	})
 }
 

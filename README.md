@@ -142,7 +142,8 @@ revocation are all exercised without a real account or network access.
 - [x] Calendar: update and delete events, with SEQUENCE handled correctly
 - [x] Serve calendars over CalDAV, read and write, from GNOME Calendar
 - [ ] Calendar: recurrence exceptions and attendees
-- [ ] `getctag` and sync-token, so clients need not re-read everything
+- [x] `getctag`, so a client can skip a sync entirely
+- [ ] `sync-collection`, for fetching only what changed
 - [ ] Event-loop driven cache instead of a short TTL
 - [x] Contacts: decrypt, split, and serve over CardDAV
 - [x] Attendees: tokens, encrypted attendee part, RSVP status

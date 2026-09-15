@@ -92,12 +92,31 @@ corrects both on the way out rather than forking the library:
   `OPTIONS, PROPFIND, REPORT, DELETE, MKCOL`, which reads as a collection that
   cannot be written to. `PUT`, `GET` and `HEAD` are added.
 
-`getctag` is missing too, so clients re-read the object list on every sync
-rather than being told nothing changed. ETags still let them skip fetching
-individual events.
+- **No `getctag`.** The CalendarServer property that lets a client skip a sync
+  entirely is absent, so `compat.go` supplies it: the name is removed from the
+  PROPFIND before go-webdav sees it — asking for a property it does not know
+  earns a 404 propstat that would then have to be unpicked — and the answer is
+  added to the response afterwards.
+- **An empty CardDAV filter matches nothing.** RFC 6352 makes the filter
+  optional and an absent one matches everything, but go-webdav reads a filter
+  with no conditions as matching nothing. A client that sends no filter would
+  be shown an empty address book, so `QueryAddressObjects` returns everything
+  in that case rather than calling the matcher.
 
 `supported-report-set` also answers 404, which is worth revisiting if a client
 fails to discover `calendar-query` or `sync-collection`.
+
+### The ctag
+
+`GET /calendar/v1/{id}/modelevents/latest` returns the calendar event loop's
+latest ID, which changes whenever anything in the calendar does. That is the
+right source for a ctag: one cheap request. Deriving one from the events
+instead would mean listing them, the very work the ctag exists to avoid.
+
+It **lags a second or two** behind a write, because Proton records the change
+in the event loop asynchronously. A client that writes and immediately polls
+sees the old token — harmless, since it already has its own change, but it does
+mean a second client learns of it a moment later.
 
 ## Packages
 
@@ -324,6 +343,11 @@ afternoon to it:
 3. **Sign with the member's own address key.** Defaulting to the first key in
    the keyring fails on accounts with several addresses, with code **2001**,
    "Provide data signed using the address key".
+4. **Attendees require an organiser.** An event with `ATTENDEE` and no
+   `ORGANIZER` is refused with "Shared event has attendees but does not have an
+   organizer". Clients do not always send one, so carbonate fills in the
+   calendar member's own address — we are writing to our own calendar, so we
+   are the organiser.
 
 ## Known hard parts
 

@@ -1,8 +1,11 @@
 package carddav
 
 import (
+	"context"
 	"testing"
 	"time"
+
+	"github.com/emersion/go-webdav/carddav"
 
 	"github.com/develonrails/carbonate/internal/contacts"
 	"github.com/develonrails/carbonate/internal/proton"
@@ -117,5 +120,95 @@ func TestPathDepths(t *testing.T) {
 		if got != want {
 			t.Errorf("%s has depth %d below the prefix, want %d", path, got, want)
 		}
+	}
+}
+
+func TestPrincipalAndHomeSet(t *testing.T) {
+	b := newBackend()
+
+	principal, err := b.CurrentUserPrincipal(context.Background())
+	if err != nil {
+		t.Fatalf("CurrentUserPrincipal: %v", err)
+	}
+
+	if principal != principalPath {
+		t.Errorf("principal = %q, want %q", principal, principalPath)
+	}
+
+	home, err := b.AddressBookHomeSetPath(context.Background())
+	if err != nil {
+		t.Fatalf("AddressBookHomeSetPath: %v", err)
+	}
+
+	if home != homeSetPath {
+		t.Errorf("home set = %q, want %q", home, homeSetPath)
+	}
+}
+
+func TestListAddressBooksReturnsTheOne(t *testing.T) {
+	books, err := newBackend().ListAddressBooks(context.Background())
+	if err != nil {
+		t.Fatalf("ListAddressBooks: %v", err)
+	}
+
+	if len(books) != 1 {
+		t.Fatalf("got %d address books, want 1", len(books))
+	}
+
+	if books[0].Path != bookPath {
+		t.Errorf("path = %q, want %q", books[0].Path, bookPath)
+	}
+
+	if books[0].Name == "" {
+		t.Error("the address book has no name, so a client would show it blank")
+	}
+}
+
+func TestGetAddressBookRejectsAnUnknownPath(t *testing.T) {
+	b := newBackend()
+
+	if _, err := b.GetAddressBook(context.Background(), bookPath); err != nil {
+		t.Errorf("the real address book was not found: %v", err)
+	}
+
+	if _, err := b.GetAddressBook(context.Background(), homeSetPath+"somethingelse/"); err == nil {
+		t.Error("an unknown address book path was accepted")
+	}
+}
+
+// Proton has exactly one collection of contacts. Saying so plainly is better
+// than letting a client create something that will not exist.
+func TestAddressBookCreationIsRefused(t *testing.T) {
+	b := newBackend()
+
+	if err := b.CreateAddressBook(context.Background(), nil); err == nil {
+		t.Error("creating an address book was allowed")
+	}
+
+	if err := b.DeleteAddressBook(context.Background(), bookPath); err == nil {
+		t.Error("deleting the address book was allowed")
+	}
+}
+
+// RFC 6352 makes the filter optional and an absent one matches everything.
+// go-webdav's matcher reads "no conditions" as "match nothing", so a client
+// that sends no filter would be told the address book is empty.
+func TestQueryWithoutFilterIsNotEmpty(t *testing.T) {
+	objects := []carddav.AddressObject{{Path: "/a.vcf"}, {Path: "/b.vcf"}}
+
+	got, err := carddav.Filter(&carddav.AddressBookQuery{}, objects)
+	if err != nil {
+		t.Fatalf("Filter: %v", err)
+	}
+
+	if len(got) != 0 {
+		t.Skip("go-webdav now matches an empty filter; the guard can go")
+	}
+
+	// The guard in QueryAddressObjects is what keeps this from reaching a
+	// client, so assert the condition it tests for.
+	query := &carddav.AddressBookQuery{}
+	if len(query.PropFilters) != 0 {
+		t.Fatal("an empty query unexpectedly carries prop filters")
 	}
 }

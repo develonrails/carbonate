@@ -198,6 +198,13 @@ func (b *Backend) QueryAddressObjects(ctx context.Context, p string, query *card
 		return nil, err
 	}
 
+	// RFC 6352 makes the filter optional, and an absent one matches
+	// everything. go-webdav's matcher reads a filter with no conditions as
+	// matching nothing instead, which hands the client an empty address book.
+	if query == nil || len(query.PropFilters) == 0 {
+		return objects, nil
+	}
+
 	return carddav.Filter(query, objects)
 }
 
