@@ -130,6 +130,11 @@ Set `CARBONATE_BRIDGE_PASSWORD` to run unattended, and `CARBONATE_DEBUG=1` to
 dump every request and response when the API misbehaves — it prints access
 tokens, so leave it off otherwise.
 
+Inviting someone to an event mails them, because at Proton that is what an
+invitation is — the event alone is invisible to anyone who does not already
+know it is there. Only a change to the guest list is announced, so re-syncing
+a calendar does not mail anybody. `CARBONATE_NO_INVITATIONS=1` turns it off.
+
 ## Building the GUI
 
 The window is behind the `gtk` build tag, so the daemon, the tests and CI need

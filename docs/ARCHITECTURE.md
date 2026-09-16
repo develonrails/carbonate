@@ -478,9 +478,57 @@ shared key packet to reuse, so the write minted a fresh one. The packets guests
 already hold then open nothing, and handing them only to the newly invited
 would quietly lock out everyone who was already there.
 
-Still not implemented: the invitation itself. Those travel by mail at Proton,
-as iTIP messages, and carbonate sends no mail — so a guest is recorded, handed
-a key, and never told.
+### Telling the guests
+
+An invitation at Proton is mail. The event in the calendar is invisible to
+anyone who does not already know it is there, so without this a guest is
+recorded, handed a key, and never told.
+
+No SMTP is involved, and the Bridge's SMTP listener is not the relevant
+precedent — that is an *inbound* interface, how a mail client hands mail to the
+Bridge. Proton's own clients send through the Mail API, and so does carbonate:
+`CreateDraft`, then `UploadAttachment` for the iTIP part, then `SendDraft`.
+
+The iTIP message is a `METHOD:REQUEST` VCALENDAR carried as a `text/calendar`
+attachment, not as a MIME part in the body. That is forced rather than chosen:
+go-proton-api's MIME package path supports only PGP/MIME and clear recipients,
+so a multipart body cannot reach a Proton guest at all. Attachments can.
+
+Each guest's copy is protected according to who they are, and the two go in
+separate packages:
+
+| Guest | Scheme | Why |
+|---|---|---|
+| On Proton | `InternalScheme`, encrypted to their address key | We have their key, from the same lookup that shares the event's session key. |
+| Anyone else | `ClearScheme` | No key of theirs, and no way to agree one. |
+
+They are separate packages because a clear recipient publishes the body's
+session key, and there is no reason to hand that to Proton for guests who did
+not need it.
+
+`X-PM-TOKEN` is stripped on the way out. It is how Proton tracks a reply
+without learning who was invited, and naming our storage in a guest's mail
+client serves nobody.
+
+**Only a change to the guest list is announced.** A newly invited guest gets a
+REQUEST and a dropped one gets a CANCEL. A CalDAV client re-PUTs an unchanged
+event as a matter of course, and `SEQUENCE` cannot tell that apart from a real
+edit, since carbonate forces it to increase on every write. Mailing on every
+PUT would make carbonate a nuisance to people who never installed it.
+
+The cost is that a guest is not told when the *time* changes. Fixing that needs
+a way to tell a material edit from a re-PUT, which the stored event does not
+currently provide.
+
+Sending happens after the write lands, and a failure is reported rather than
+returned: the event is saved by then, and telling a client its PUT failed would
+have it retry and write again.
+
+`CARBONATE_NO_INVITATIONS=1` turns the mail off. It is a side effect a CalDAV
+client never asked for, reaching people who are not the user.
+
+Still not implemented: a cancellation when the whole event is deleted. `Delete`
+does not decrypt the events it removes, so it does not know who to tell.
 
 ### Three ways Proton rejects a write
 

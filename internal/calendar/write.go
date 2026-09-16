@@ -190,7 +190,31 @@ func putOne(ctx context.Context, conn *proton.Conn, calendarID string, event *ic
 		return "", false, err
 	}
 
+	// Only after the write lands. Mailing people about an event Proton then
+	// refused would be worse than not mailing them at all.
+	announce(ctx, conn, keys, event, newGuests(event, existing, keys.Email), data.RemovedAttendeeAddresses)
+
 	return id, existing == nil, nil
+}
+
+// announce tells the guests whose invitation has changed, and reports rather
+// than returns a failure.
+//
+// The event is written by this point. A mail server having a bad afternoon is
+// not a reason to tell a CalDAV client that its PUT failed, when the thing it
+// asked for has already happened — it would retry, and write the event again.
+func announce(ctx context.Context, conn *proton.Conn, keys *proton.CalendarKeys, event *ical.Event, invited, dropped []string) {
+	for _, group := range []struct {
+		method    string
+		addresses []string
+	}{
+		{methodRequest, invited},
+		{methodCancel, dropped},
+	} {
+		if err := tellGuests(ctx, conn, keys, event, group.method, group.addresses); err != nil {
+			fmt.Fprintf(os.Stderr, "carbonate: the event was saved, but %s could not be told: %v\n", strings.Join(group.addresses, ", "), err)
+		}
+	}
 }
 
 // Delete removes the event with the given UID. It reports whether an event
