@@ -282,6 +282,7 @@ func (u *ui) runPage() *gtk.Box {
 	page.Append(toggle)
 	page.Append(field("Calendar address", calendarURL))
 	page.Append(field("Contacts address", contactsURL))
+	page.Append(u.autostartRow())
 
 	setURLs := func(addr string) {
 		calendarURL.SetText("http://" + addr + "/caldav/")
@@ -322,6 +323,57 @@ func (u *ui) runPage() *gtk.Box {
 	})
 
 	return page
+}
+
+// autostartRow offers to have carbonate started at login.
+//
+// The switch shows what was last asked for, not what is currently set: the
+// portal has no way to be asked. The system owns that answer and shows it in
+// its own settings, which the hint below points at rather than pretending we
+// know better.
+func (u *ui) autostartRow() *gtk.Box {
+	row := gtk.NewBox(gtk.OrientationVertical, 4)
+
+	toggle := gtk.NewSwitch()
+	toggle.SetHAlign(gtk.AlignStart)
+
+	hint := gtk.NewLabel("Your system asks before allowing this, and can withdraw it later in its background app settings.")
+	hint.SetXAlign(0)
+	hint.SetWrap(true)
+	hint.AddCSSClass("dim-label")
+
+	row.Append(field("Start at login", toggle))
+	row.Append(hint)
+
+	toggle.ConnectStateSet(func(state bool) bool {
+		toggle.SetSensitive(false)
+
+		requestAutostart(context.Background(), state, func(granted bool, err error) {
+			glib.IdleAdd(func() {
+				toggle.SetSensitive(true)
+
+				switch {
+				case err != nil:
+					u.say("Could not ask to start at login: %v", err)
+				case !granted:
+					u.say("Your system did not allow starting at login.")
+				case state:
+					u.say("Carbonate will start at login.")
+				default:
+					u.say("Carbonate will no longer start at login.")
+				}
+
+				// The switch follows the answer, not the click, so a refusal
+				// leaves it showing what is actually true.
+				toggle.SetState(granted && state)
+			})
+		})
+
+		// We set the state ourselves, once there is an answer to set it from.
+		return true
+	})
+
+	return row
 }
 
 func selectable(text string) *gtk.Label {
