@@ -312,7 +312,13 @@ DAV `ctag` / `sync-token` so clients fetch just the delta.
   before formatting.
 - **`CARBONATE_DEBUG=1`** dumps full requests and responses. It is how the two
   findings above were diagnosed, and it prints access tokens, so keep it off
-  by default.
+  by default. It also restores go-proton-api's own HTTP logging, which is
+  otherwise silenced: resty narrates every failed request to stderr as it
+  happens, and carbonate reports the same failures in its own words, so
+  leaving both on turns one problem into three lines. The error still travels
+  up either way — only the commentary goes. What silence does cost is resty's
+  warning about a request that was retried and then succeeded, which nothing
+  else reports because nothing went wrong.
 
 ## The write path
 

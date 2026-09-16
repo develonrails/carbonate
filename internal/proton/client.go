@@ -494,12 +494,30 @@ func newManager() *api.Manager {
 	// CARBONATE_DEBUG dumps full requests and responses, including access
 	// tokens and encrypted payloads. For diagnosing API drift, not for
 	// everyday use.
+	//
+	// It is also where the library's own HTTP logging belongs. Left alone,
+	// resty narrates every failed request to stderr as it happens — which
+	// carbonate then catches and explains in its own words, so one problem
+	// arrives as three lines, two of them written for nobody. Silencing it
+	// loses no information: the failure still travels up as an error.
 	if os.Getenv("CARBONATE_DEBUG") != "" {
 		opts = append(opts, api.WithDebug(true))
+	} else {
+		opts = append(opts, api.WithLogger(quietLogger{}))
 	}
 
 	return api.New(opts...)
 }
+
+// quietLogger discards the HTTP client's running commentary.
+//
+// It satisfies resty's logger interface without importing resty: the methods
+// are all carbonate needs to say that it would rather do the talking.
+type quietLogger struct{}
+
+func (quietLogger) Errorf(string, ...any) {}
+func (quietLogger) Warnf(string, ...any)  {}
+func (quietLogger) Debugf(string, ...any) {}
 
 // Login performs a full interactive login and returns a session ready to be
 // persisted. It verifies the mailbox password before returning, so a stored
