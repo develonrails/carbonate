@@ -231,6 +231,43 @@ func (c *Conn) AddressKeyRing(addr api.Address) (*crypto.KeyRing, error) {
 	return kr, nil
 }
 
+// PublicKeyRing returns the keys an address can be encrypted to, or nil when
+// there are none to encrypt to.
+//
+// Proton answers for any address, inside or out, so the recipient type is what
+// tells an account apart from an outsider: only an internal recipient has keys
+// we may encrypt to. Obsolete keys are dropped — Proton keeps them so that old
+// mail stays readable, not so that new mail can be sent to them.
+func (c *Conn) PublicKeyRing(ctx context.Context, address string) (*crypto.KeyRing, error) {
+	keys, recipient, err := c.Client.GetPublicKeys(ctx, address)
+	if err != nil {
+		return nil, fmt.Errorf("fetching public keys for %s: %w", address, err)
+	}
+
+	if recipient != api.RecipientTypeInternal {
+		return nil, nil
+	}
+
+	usable := make(api.PublicKeys, 0, len(keys))
+
+	for _, key := range keys {
+		if key.Flags&api.KeyStateActive != 0 {
+			usable = append(usable, key)
+		}
+	}
+
+	if len(usable) == 0 {
+		return nil, nil
+	}
+
+	kr, err := usable.GetKeyRing()
+	if err != nil {
+		return nil, fmt.Errorf("building a keyring for %s: %w", address, err)
+	}
+
+	return kr, nil
+}
+
 // ErrSessionLostScope means Proton has demoted the session. It happens when a
 // client holds more sessions than Proton allows: rather than refusing the
 // newest, it strips scope from older ones, so the failure surfaces later on an

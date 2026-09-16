@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -66,6 +67,24 @@ type eventData struct {
 	Notifications []notification `json:"Notifications"`
 	Permissions   int            `json:",omitempty"`
 	IsOrganizer   int            `json:",omitempty"`
+
+	// AddedProtonAttendees hands the event's shared session key to guests who
+	// hold a Proton account, and RemovedAttendeeAddresses names the guests who
+	// have just been dropped. Both are keyed by address rather than by token:
+	// Proton needs to know who, not merely that somebody changed.
+	AddedProtonAttendees     []protonAttendee `json:",omitempty"`
+	RemovedAttendeeAddresses []string         `json:",omitempty"`
+}
+
+// protonAttendee gives a guest on Proton their own copy of the event's shared
+// session key, wrapped to their address key.
+//
+// Being on the guest list is not enough to read the event: the parts everyone
+// invited is meant to see are encrypted under that session key, and nothing
+// else hands a guest a copy of it.
+type protonAttendee struct {
+	Email            string
+	AddressKeyPacket string
 }
 
 // attendee is the part of an invitation Proton keeps in the clear, so that it
@@ -154,7 +173,7 @@ func putOne(ctx context.Context, conn *proton.Conn, calendarID string, event *ic
 		return "", false, err
 	}
 
-	data, err := buildEvent(event, keys, existing)
+	data, err := buildEvent(ctx, event, keys, existing, conn.PublicKeyRing)
 	if err != nil {
 		return "", false, err
 	}
@@ -344,7 +363,15 @@ func parseEvent(ics string) (*ical.Event, error) {
 	return events[0], nil
 }
 
-func buildEvent(event *ical.Event, keys *proton.CalendarKeys, existing *rawEvent) (*eventData, error) {
+// addressKeys resolves an address to the keys Proton says to encrypt to, and
+// returns nil for an address it holds no keys for.
+//
+// Taken as a function so that building an event stays testable without a live
+// connection, and so that the one place that talks to Proton mid-write is
+// named rather than reached for.
+type addressKeys func(ctx context.Context, address string) (*crypto.KeyRing, error)
+
+func buildEvent(ctx context.Context, event *ical.Event, keys *proton.CalendarKeys, existing *rawEvent, lookup addressKeys) (*eventData, error) {
 	if err := normaliseSequence(event, existing); err != nil {
 		return nil, err
 	}
@@ -383,16 +410,182 @@ func buildEvent(event *ical.Event, keys *proton.CalendarKeys, existing *rawEvent
 
 	// Attendees share the event's session key, so they are built after the
 	// shared part has settled which key that is.
-	attendees, clear, err := buildAttendees(event, keys, data.SharedKeyPacket, sharedPacket)
+	guests, err := buildAttendees(event, keys, data.SharedKeyPacket, sharedPacket)
 	if err != nil {
 		return nil, err
 	}
 
-	data.AttendeesEventContent = attendees
-	data.Attendees = clear
+	data.AttendeesEventContent = guests.cards
+	data.Attendees = guests.clear
 	data.Notifications = alarmsOf(event)
 
+	if err := shareSessionKey(ctx, data, guests, existing, keys, lookup); err != nil {
+		return nil, err
+	}
+
+	data.RemovedAttendeeAddresses = droppedAttendees(guests, existing, keys)
+
 	return data, nil
+}
+
+// shareSessionKey hands the event's shared session key to every guest on
+// Proton who was not already invited.
+//
+// A guest outside Proton gets nothing: there is no key of theirs to wrap it
+// to, and they will have to hear about the event some other way. An address
+// Proton cannot answer for is reported and skipped rather than failing the
+// write — the guest is still recorded, exactly as they were before.
+//
+// Only the newly invited are handed a key, which is what the web client does:
+// re-wrapping the key for someone who already holds it is pointless work and a
+// pointless round trip. Who was already there is read from the tokens Proton
+// keeps in the clear, so it costs nothing to know.
+//
+// The exception is an event that has just been re-keyed, where the packets
+// guests already hold open nothing. Reusing the stored key packet is the usual
+// path and avoids this entirely, but when there is none to reuse, everyone has
+// to be handed the new key or the guests who were already there are quietly
+// locked out.
+//
+// We are never handed a packet for ourselves. A client routinely lists the
+// organiser among the attendees, and the organiser opens the event through the
+// calendar key like any other member.
+func shareSessionKey(ctx context.Context, data *eventData, guests attendeeParts, existing *rawEvent, keys *proton.CalendarKeys, lookup addressKeys) error {
+	if lookup == nil || guests.sessionKey == nil {
+		return nil
+	}
+
+	reKeyed := data.SharedKeyPacket != ""
+
+	invited := make(map[string]bool)
+
+	if existing != nil && !reKeyed {
+		for _, a := range existing.Attendees {
+			invited[a.Token] = true
+		}
+	}
+
+	for _, guest := range guests.guests {
+		if invited[guest.token] || guest.address == normaliseAddress(keys.Email) {
+			continue
+		}
+
+		kr, err := lookup(ctx, guest.address)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "carbonate: could not look up keys for %s, who will not be able to open the event: %v\n", guest.address, err)
+
+			continue
+		}
+
+		if kr == nil {
+			continue
+		}
+
+		packet, err := kr.EncryptSessionKey(guests.sessionKey)
+		if err != nil {
+			return fmt.Errorf("encrypting the session key for %s: %w", guest.address, err)
+		}
+
+		data.AddedProtonAttendees = append(data.AddedProtonAttendees, protonAttendee{
+			Email:            guest.address,
+			AddressKeyPacket: base64.StdEncoding.EncodeToString(packet),
+		})
+	}
+
+	return nil
+}
+
+// droppedAttendees names the guests the stored event had and this one does not.
+//
+// Proton wants addresses here, and the clear list it keeps beside an event
+// holds only tokens, which are hashes — so the stored guest list has to be
+// decrypted to find out who is leaving. Failing that is not worth refusing the
+// write over: an uninformed guest is the behaviour carbonate has always had.
+func droppedAttendees(guests attendeeParts, existing *rawEvent, keys *proton.CalendarKeys) []string {
+	stored, err := storedAttendees(existing, keys)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "carbonate: could not read the stored guest list, so nobody will be told they were removed: %v\n", err)
+
+		return nil
+	}
+
+	seen := make(map[string]bool, len(guests.guests))
+	for _, guest := range guests.guests {
+		seen[guest.address] = true
+	}
+
+	var out []string
+
+	// seen doubles as the list of names already accounted for, so a guest
+	// written down twice is only reported as leaving once.
+	for _, address := range stored {
+		if seen[address] {
+			continue
+		}
+
+		seen[address] = true
+
+		out = append(out, address)
+	}
+
+	return out
+}
+
+// storedAttendees returns the addresses invited to the event Proton already
+// holds.
+//
+// They live only in the encrypted attendee part, under the shared session key
+// — the same place carbonate wrote them.
+func storedAttendees(existing *rawEvent, keys *proton.CalendarKeys) ([]string, error) {
+	if existing == nil || len(existing.AttendeesEvents) == 0 {
+		return nil, nil
+	}
+
+	keyPacket, err := base64.StdEncoding.DecodeString(existing.SharedKeyPacket)
+	if err != nil {
+		return nil, fmt.Errorf("decoding the shared key packet: %w", err)
+	}
+
+	var out []string
+
+	for _, part := range existing.AttendeesEvents {
+		if err := part.Decode(keys.CalKR, keys.AddrKR, keyPacket); err != nil {
+			return nil, fmt.Errorf("decrypting the stored attendees: %w", err)
+		}
+
+		stored, err := parseEvent(part.Data)
+		if err != nil {
+			return nil, fmt.Errorf("parsing the stored attendees: %w", err)
+		}
+
+		for _, field := range stored.Props["ATTENDEE"] {
+			out = append(out, normaliseAddress(field.Value))
+		}
+	}
+
+	return out, nil
+}
+
+// guest is one invitation, under both the names it goes by: the address a
+// client wrote down, and the token Proton knows them as.
+type guest struct {
+	address string
+	token   string
+}
+
+// attendeeParts is everything an event's guest list contributes to a write.
+type attendeeParts struct {
+	cards []card
+	clear []attendee
+
+	// guests names who was invited. Proton never learns this from the clear
+	// list, but carbonate needs it to hand a Proton guest the session key and
+	// to say who has been dropped.
+	guests []guest
+
+	// sessionKey is the shared key the guest list was encrypted under, and so
+	// the key a guest needs a copy of to open the event at all.
+	sessionKey *crypto.SessionKey
 }
 
 // buildAttendees renders the attendee part and the clear list Proton keeps
@@ -401,10 +594,10 @@ func buildEvent(event *ical.Event, keys *proton.CalendarKeys, existing *rawEvent
 // Every attendee is identified by a token rather than an address: Proton
 // tracks replies without learning who was invited. The token is a hash of the
 // event UID and the address, so both sides derive the same one.
-func buildAttendees(event *ical.Event, keys *proton.CalendarKeys, newPacket, oldPacket string) ([]card, []attendee, error) {
+func buildAttendees(event *ical.Event, keys *proton.CalendarKeys, newPacket, oldPacket string) (attendeeParts, error) {
 	fields := event.Props["ATTENDEE"]
 	if len(fields) == 0 {
-		return nil, nil, nil
+		return attendeeParts{}, nil
 	}
 
 	uid := ""
@@ -412,7 +605,10 @@ func buildAttendees(event *ical.Event, keys *proton.CalendarKeys, newPacket, old
 		uid = strings.TrimSpace(p.Value)
 	}
 
-	clear := make([]attendee, 0, len(fields))
+	out := attendeeParts{
+		clear:  make([]attendee, 0, len(fields)),
+		guests: make([]guest, 0, len(fields)),
+	}
 
 	// Index rather than range over a copy: the token has to be written back
 	// into the event, and a copied Prop with a nil Params map would drop it.
@@ -427,17 +623,18 @@ func buildAttendees(event *ical.Event, keys *proton.CalendarKeys, newPacket, old
 
 		field.Params.Set("X-PM-TOKEN", token)
 
-		clear = append(clear, attendee{Token: token, Status: partstat(field)})
+		out.clear = append(out.clear, attendee{Token: token, Status: partstat(field)})
+		out.guests = append(out.guests, guest{address: normaliseAddress(field.Value), token: token})
 	}
 
 	body := pick(event, attendeeEncrypted)
 	if body == "" {
-		return nil, nil, nil
+		return attendeeParts{}, nil
 	}
 
 	signature, err := sign(keys.AddrKR, body)
 	if err != nil {
-		return nil, nil, err
+		return attendeeParts{}, err
 	}
 
 	// Reuse whichever shared session key the event ended up with: a freshly
@@ -449,19 +646,22 @@ func buildAttendees(event *ical.Event, keys *proton.CalendarKeys, newPacket, old
 
 	sessionKey, _, err := sessionKeyFor(keys, packet)
 	if err != nil {
-		return nil, nil, err
+		return attendeeParts{}, err
 	}
 
 	encrypted, err := sessionKey.Encrypt(crypto.NewPlainMessageFromString(body))
 	if err != nil {
-		return nil, nil, fmt.Errorf("encrypting attendees: %w", err)
+		return attendeeParts{}, fmt.Errorf("encrypting attendees: %w", err)
 	}
 
-	return []card{{
+	out.sessionKey = sessionKey
+	out.cards = []card{{
 		Type:      cardEncryptedAndSigned,
 		Data:      base64.StdEncoding.EncodeToString(encrypted),
 		Signature: signature,
-	}}, clear, nil
+	}}
+
+	return out, nil
 }
 
 // recurrenceIDOf returns the occurrence an event replaces, as the Unix time
