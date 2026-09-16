@@ -2,7 +2,6 @@ package caldav
 
 import (
 	"context"
-	"fmt"
 	"html"
 	"strings"
 
@@ -215,5 +214,3 @@ const syncTokenPrefix = "urn:carbonate:"
 func parseSyncToken(token string) string {
 	return strings.TrimPrefix(strings.TrimSpace(token), syncTokenPrefix)
 }
-
-var _ = fmt.Sprintf
