@@ -444,10 +444,37 @@ Status maps onto the same integers as iCalendar's PARTSTAT:
 | `DECLINED` | 2 |
 | `ACCEPTED` | 3 |
 
-Not implemented: `AddedProtonAttendees`, which hands the shared session key to
-a Proton-internal attendee's address key so they can open the event, and
-`RemovedAttendeeAddresses`. Invitations themselves travel by mail at Proton and
-carbonate sends none, so an attendee is recorded but not notified.
+Two more fields travel beside them, and unlike the pair above they are keyed
+by address rather than by token — Proton has to know *who*, not merely that
+somebody changed:
+
+- **`AddedProtonAttendees`** — `{Email, AddressKeyPacket}`, the shared session
+  key wrapped to a guest's own address key. Being on the list is not enough to
+  read the event: the parts a guest is meant to see are encrypted under that
+  session key, and this is the only thing that hands them a copy. Sent only for
+  guests newly added, since re-wrapping the key for someone who already holds
+  it buys nothing. Whether a guest is new is read from the tokens Proton keeps
+  in the clear, so it costs no decryption to know.
+- **`RemovedAttendeeAddresses`** — the addresses dropped since the stored
+  version. This one *does* cost a decryption: the clear list holds only tokens,
+  which are hashes, so the stored guest list has to be read back to find out
+  who is leaving. Failing that is not worth refusing a write over, so it
+  degrades to telling nobody.
+
+A guest outside Proton gets no key packet — there is no key of theirs to wrap
+one to. An address Proton will not answer for is reported on stderr and
+skipped, leaving the guest recorded but unable to open the event. Nor does the
+organiser get one: clients routinely list them among the attendees, and they
+already open the event through the calendar key.
+
+The one case where every guest is re-keyed is an event that had no stored
+shared key packet to reuse, so the write minted a fresh one. The packets guests
+already hold then open nothing, and handing them only to the newly invited
+would quietly lock out everyone who was already there.
+
+Still not implemented: the invitation itself. Those travel by mail at Proton,
+as iTIP messages, and carbonate sends no mail — so a guest is recorded, handed
+a key, and never told.
 
 ### Three ways Proton rejects a write
 
@@ -478,6 +505,8 @@ afternoon to it:
    is the main reason carbonate exists — do it early, not last.
 3. **Scheduling.** iTIP invitations travel over mail at Proton. protoxide does
    no server-side scheduling by design; decide deliberately whether we do.
+   carbonate now shares the session key with Proton guests, which is the half
+   of the problem that needs no SMTP path — the mail half still does.
 4. **Recurrence exceptions and attendees.** The usual calendar edge cases, made
    worse by the encrypted split above.
 5. **Cold start.** First full fetch and decrypt takes minutes for thousands of
