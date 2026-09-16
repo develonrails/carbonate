@@ -90,6 +90,7 @@ they are asked (password, then any two-factor code):
 Environment:
   CARBONATE_BRIDGE_PASSWORD   bridge password, to run unattended
   CARBONATE_APP_VERSION       client version reported to Proton
+  CARBONATE_NO_INVITATIONS    do not mail guests when an event invites them
 
 Run "carbonate <command> -h" for command-specific flags.
 `)
