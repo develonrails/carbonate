@@ -131,3 +131,37 @@ func TestIndexIsNotACatchAll(t *testing.T) {
 		t.Errorf("status = %d, want 404", rec.Result().StatusCode)
 	}
 }
+
+// A client handed only the bare address asks the root whether this is a
+// WebDAV server before it will look at anything else. GNOME Online Accounts
+// gives up here — it never tries the well-known paths — so a root that stays
+// silent about DAV makes every correct answer below it unreachable.
+func TestIndexAdvertisesDAVOnOptions(t *testing.T) {
+	rec := httptest.NewRecorder()
+	Index(rec, httptest.NewRequest(http.MethodOptions, "/", nil))
+
+	result := rec.Result()
+
+	if result.StatusCode != http.StatusNoContent {
+		t.Errorf("status = %d, want 204", result.StatusCode)
+	}
+
+	dav := result.Header.Get("Dav")
+
+	for _, want := range []string{"1", "3", "calendar-access", "addressbook"} {
+		if !strings.Contains(dav, want) {
+			t.Errorf("Dav = %q, missing %q", dav, want)
+		}
+	}
+}
+
+// The header belongs on the page too, so that a client which looks at the
+// root with GET rather than OPTIONS reaches the same conclusion.
+func TestIndexAdvertisesDAVOnGet(t *testing.T) {
+	rec := httptest.NewRecorder()
+	Index(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	if dav := rec.Result().Header.Get("Dav"); dav == "" {
+		t.Error("the index page carries no Dav header")
+	}
+}

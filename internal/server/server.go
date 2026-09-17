@@ -166,7 +166,19 @@ func Equal(a, b string) bool {
 	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
 
+// davCompliance is what the root claims to be. The collections below it
+// answer with their own, narrower classes; this is the union, because both
+// protocols are served from this one address.
+const davCompliance = "1, 3, calendar-access, addressbook"
+
 // index points a browser, or a curious client, at the two collections.
+//
+// OPTIONS is answered with the compliance classes, because that is how a
+// client given only the bare address decides whether this is a WebDAV server
+// at all. A plain page with no Dav header reads as "not a WebDAV server", and
+// the client stops there — it never reaches the well-known paths, however
+// correct those are. GNOME Online Accounts asks exactly this question first,
+// and until it was answered, no amount of correctness further down mattered.
 func Index(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
 		http.NotFound(w, r)
@@ -174,6 +186,15 @@ func Index(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if r.Method == http.MethodOptions {
+		w.Header().Set("Dav", davCompliance)
+		w.Header().Set("Allow", "OPTIONS, GET, HEAD")
+		w.WriteHeader(http.StatusNoContent)
+
+		return
+	}
+
+	w.Header().Set("Dav", davCompliance)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	fmt.Fprint(w, "carbonate\n\nCalDAV:  /caldav/\nCardDAV: /carddav/\n")
 }
