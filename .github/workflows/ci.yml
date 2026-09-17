@@ -44,7 +44,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install GTK and Go
-        run: dnf install -y golang gcc glibc-devel gtk4-devel gobject-introspection-devel
+        run: dnf install -y golang gcc glibc-devel gtk4-devel libadwaita-devel gobject-introspection-devel
 
       - name: Build the GUI
         run: CGO_ENABLED=1 go build -tags gtk ./cmd/carbonate-gui
