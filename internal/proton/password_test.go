@@ -144,3 +144,26 @@ func TestExplainVersionLeavesOtherErrorsAlone(t *testing.T) {
 		t.Error("nil was turned into an error")
 	}
 }
+
+// Proton checks the platform and product, not the version. A name without the
+// separator is refused (2064), and so is a product carbonate is not allowed to
+// claim — so this string cannot be tidied into something that reads better.
+func TestAppVersionKeepsProtonsShape(t *testing.T) {
+	version := appVersion()
+
+	platform, rest, found := strings.Cut(version, "-")
+	if !found || platform == "" {
+		t.Fatalf("app version %q has no platform before the dash", version)
+	}
+
+	product, number, found := strings.Cut(rest, "@")
+	if !found || product == "" || number == "" {
+		t.Fatalf("app version %q is not product@version", version)
+	}
+
+	// "bridge" is refused with 8004 and "calendar" with 5002; "mail" is the
+	// one the API accepts.
+	if product != "mail" {
+		t.Errorf("product = %q, which Proton does not accept from us", product)
+	}
+}

@@ -33,9 +33,25 @@ var ErrWrongMailboxPassword = errors.New("mailbox password did not unlock any ke
 // security key.
 var ErrFIDO2Unsupported = errors.New("account requires a FIDO2 security key, which carbonate does not support yet")
 
-// appVersion identifies the client to Proton. The API validates this and
-// rejects versions it does not recognise, so this may need updating when
-// Proton retires an old client. Override with CARBONATE_APP_VERSION.
+// defaultAppVersion identifies carbonate to Proton.
+//
+// The shape is Proton's, and only part of it is load-bearing. Tried against
+// the live API:
+//
+//	linux-mail@1.0.0      accepted
+//	linux-mail@0.0.1      accepted
+//	linux-mail@99.99.99   accepted
+//	carbonate@1.0.0       2064, platform and product must be separated
+//	linux-calendar@5.0.0  5002, invalid app version
+//	linux-bridge@3.0.0    8004, operation not allowed
+//
+// So the version number is not checked at all, and the product is checked
+// against a list carbonate is not on. "mail" is what works. "bridge" — what
+// carbonate actually is — is refused outright, which is worth knowing before
+// anyone decides to be more honest here; the official Bridge requires a paid
+// plan, and carbonate works on a free one.
+//
+// CARBONATE_APP_VERSION overrides it, for the day this stops being true.
 const defaultAppVersion = "linux-mail@1.0.0"
 
 func appVersion() string {

@@ -298,8 +298,16 @@ DAV `ctag` / `sync-token` so clients fetch just the delta.
   account that appears broken. Three such callbacks were written during this
   project, one of them in code that shipped, before the shape was changed to
   one that cannot forget.
-- **The app version is validated.** Proton rejects clients it does not
-  recognise, so `CARBONATE_APP_VERSION` exists as an escape hatch.
+- **The app version: the product is checked, the number is not.** Tried
+  against the live API, `linux-mail@0.0.1` and `linux-mail@99.99.99` are both
+  accepted, so there is no minimum to keep up with. What is checked is the
+  `<platform>-<product>` part: `carbonate@1.0.0` is refused with 2064
+  ("platform and product must be separated"), `linux-calendar@5.0.0` with 5002,
+  and `linux-bridge@3.0.0` with 8004, "operation not allowed".
+
+  So carbonate cannot identify as what it is. `mail` is the one that works,
+  and the official Bridge requires a paid plan while carbonate works on a free
+  one — worth knowing before anyone decides to be more honest here.
 - **The fake server serves TLS by default** with a self-signed certificate that
   go-proton-api refuses. Tests use `server.WithTLS(false)`.
 - **Calendar names are not encrypted.** Almost everything in Proton Calendar
