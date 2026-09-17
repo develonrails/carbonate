@@ -5,9 +5,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/emersion/go-vcard"
 
@@ -35,22 +37,71 @@ type Store interface {
 
 type protonStore struct {
 	conn *proton.Conn
+
+	// out is where a contact that cannot be read is reported, and reported
+	// is how it stays: an address book that is quietly one contact short is
+	// worse than one that says which and why.
+	out io.Writer
+
+	// said remembers which ids have been reported, because the listing runs
+	// on every poll and the same unreadable contact would otherwise fill the
+	// log.
+	mu   sync.Mutex
+	said map[string]bool
 }
 
-// NewStore returns a Store reading and writing a Proton account.
-func NewStore(conn *proton.Conn) Store {
-	return protonStore{conn: conn}
+// NewStore returns a Store reading and writing a Proton account. Contacts
+// that cannot be decrypted are reported to out; a nil writer says nothing.
+func NewStore(conn *proton.Conn, out io.Writer) Store {
+	return &protonStore{conn: conn, out: out, said: make(map[string]bool)}
 }
 
-func (s protonStore) Contacts(ctx context.Context) ([]contacts.Contact, error) {
-	return contacts.List(ctx, s.conn)
+func (s *protonStore) Contacts(ctx context.Context) ([]contacts.Contact, error) {
+	people, unreadable, err := contacts.List(ctx, s.conn)
+	if err != nil {
+		return nil, err
+	}
+
+	s.report(unreadable)
+
+	return people, nil
 }
 
-func (s protonStore) Put(ctx context.Context, card vcard.Card) (string, bool, error) {
+// report names each unreadable contact once.
+func (s *protonStore) report(ids []string) {
+	if s.out == nil || len(ids) == 0 {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, id := range ids {
+		if s.said[id] {
+			continue
+		}
+
+		s.said[id] = true
+
+		fmt.Fprintf(s.out, "contact %s: cannot be decrypted, so it is not being served\n", short(id))
+	}
+}
+
+// short renders a Proton id at a length that identifies it in a log without
+// filling the line.
+func short(id string) string {
+	if len(id) <= 8 {
+		return id
+	}
+
+	return id[:8] + "…"
+}
+
+func (s *protonStore) Put(ctx context.Context, card vcard.Card) (string, bool, error) {
 	return contacts.Put(ctx, s.conn, card)
 }
 
-func (s protonStore) Delete(ctx context.Context, uid string) (bool, error) {
+func (s *protonStore) Delete(ctx context.Context, uid string) (bool, error) {
 	return contacts.Delete(ctx, s.conn, uid)
 }
 
@@ -65,7 +116,7 @@ func (s protonStore) Delete(ctx context.Context, uid string) (bool, error) {
 // The core event loop would be cheaper still, but its latest id moves when
 // any mail arrives, and every one of those would send the client off to
 // refetch and decrypt an address book that had not changed.
-func (s protonStore) ChangeToken(ctx context.Context) (string, error) {
+func (s *protonStore) ChangeToken(ctx context.Context) (string, error) {
 	index, err := s.conn.Client.GetAllContacts(ctx)
 	if err != nil {
 		return "", fmt.Errorf("listing contacts: %w", err)

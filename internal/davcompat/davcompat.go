@@ -33,6 +33,23 @@ var childPattern = regexp.MustCompile(`(?s)<([\w-]+)([^>/]*)>\s*</[\w-]+>|<([\w-
 // omits PUT, and a client reading the Allow header concludes it cannot write.
 var writeMethods = []string{http.MethodPut, http.MethodGet, http.MethodHead}
 
+// replacedKey carries whether a PUT replaced something that was already
+// there, from the backend that knows to the reply that has to say so.
+type replacedKey struct{}
+
+// MarkReplaced records that this request's PUT replaced an existing resource
+// rather than creating one, so that the reply can say 204 instead of 201.
+//
+// go-webdav answers every PUT with 201 Created — it says so itself, in a TODO
+// beside the line. A client is entitled to read that as a new resource having
+// appeared, and to keep a second copy of something it only meant to update.
+// The backend is the only thing that knows which happened, so it says.
+func MarkReplaced(ctx context.Context) {
+	if flag, ok := ctx.Value(replacedKey{}).(*bool); ok {
+		*flag = true
+	}
+}
+
 // CTagFunc returns the change token of the collection at a path.
 type CTagFunc func(ctx context.Context, path string) (string, error)
 
@@ -84,6 +101,10 @@ func Wrap(next http.Handler, opts Options) http.Handler {
 		}
 
 		rec := &recorder{ResponseWriter: w, method: r.Method}
+
+		if r.Method == http.MethodPut {
+			r = r.WithContext(context.WithValue(r.Context(), replacedKey{}, &rec.replaced))
+		}
 
 		next.ServeHTTP(rec, r)
 
@@ -241,10 +262,11 @@ func concat(parts ...[]byte) []byte {
 type recorder struct {
 	http.ResponseWriter
 
-	method string
-	status int
-	body   bytes.Buffer
-	sent   bool
+	method   string
+	status   int
+	body     bytes.Buffer
+	sent     bool
+	replaced bool
 }
 
 func (r *recorder) WriteHeader(status int) {
@@ -269,6 +291,13 @@ func (r *recorder) flush() {
 
 	if r.status == 0 {
 		r.status = http.StatusOK
+	}
+
+	// A PUT that replaced has no new resource to report, and nothing to say
+	// in a body either.
+	if r.method == http.MethodPut && r.status == http.StatusCreated && r.replaced {
+		r.status = http.StatusNoContent
+		body = nil
 	}
 
 	// The buffered body has its own length; the one go-webdav set is stale.

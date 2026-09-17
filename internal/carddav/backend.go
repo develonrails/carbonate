@@ -254,8 +254,13 @@ func (b *Backend) PutAddressObject(ctx context.Context, p string, card vcard.Car
 		return nil, webdav.NewHTTPError(http.StatusBadRequest, fmt.Errorf("contact has no UID"))
 	}
 
-	if _, _, err := b.store.Put(ctx, card); err != nil {
+	_, created, err := b.store.Put(ctx, card)
+	if err != nil {
 		return nil, err
+	}
+
+	if !created {
+		davcompat.MarkReplaced(ctx)
 	}
 
 	b.mu.Lock()

@@ -80,3 +80,62 @@ func TestGetctagDoesNotListContacts(t *testing.T) {
 		t.Error("the change token was never asked for")
 	}
 }
+
+// go-webdav answers every PUT with 201 Created, and says so itself in a TODO
+// beside the line. A client may read 201 as a resource having appeared and
+// keep a second copy of something it only meant to update.
+func TestPutReportsAReplacement(t *testing.T) {
+	fake := newFakeContacts()
+	b := New(fake)
+
+	card := make(vcard.Card)
+	card.SetValue(vcard.FieldVersion, "4.0")
+	card.SetValue(vcard.FieldUID, "person@example.com")
+	card.SetValue(vcard.FieldFormattedName, "Jan Jansen")
+
+	var buf strings.Builder
+	if err := vcard.NewEncoder(&buf).Encode(card); err != nil {
+		t.Fatalf("encoding: %v", err)
+	}
+
+	// The fake already holds this UID, so writing it is a replacement.
+	fake.created = false
+
+	req := httptest.NewRequest("PUT", objectPath("person@example.com"), strings.NewReader(buf.String()))
+	req.Header.Set("Content-Type", "text/vcard")
+
+	rec := httptest.NewRecorder()
+	b.Handler().ServeHTTP(rec, req)
+
+	if got := rec.Result().StatusCode; got != 204 {
+		t.Errorf("status = %d, want 204 for a replacement", got)
+	}
+}
+
+// A contact that was not there is still a creation, and must say so.
+func TestPutReportsACreation(t *testing.T) {
+	fake := newFakeContacts()
+	fake.created = true
+
+	b := New(fake)
+
+	card := make(vcard.Card)
+	card.SetValue(vcard.FieldVersion, "4.0")
+	card.SetValue(vcard.FieldUID, "new@example.com")
+	card.SetValue(vcard.FieldFormattedName, "Nieuw")
+
+	var buf strings.Builder
+	if err := vcard.NewEncoder(&buf).Encode(card); err != nil {
+		t.Fatalf("encoding: %v", err)
+	}
+
+	req := httptest.NewRequest("PUT", objectPath("new@example.com"), strings.NewReader(buf.String()))
+	req.Header.Set("Content-Type", "text/vcard")
+
+	rec := httptest.NewRecorder()
+	b.Handler().ServeHTTP(rec, req)
+
+	if got := rec.Result().StatusCode; got != 201 {
+		t.Errorf("status = %d, want 201 for a new contact", got)
+	}
+}

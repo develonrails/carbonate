@@ -44,16 +44,22 @@ type Contact struct {
 	Card     vcard.Card
 }
 
-// List returns every contact that can be decrypted.
+// List returns every contact that can be decrypted, and the ids of those that
+// cannot.
 //
-// A contact that cannot be is skipped rather than failing the listing. The
-// two are not close: a client that gets an error shows no address book at
-// all, so a single unreadable card would hide every readable one behind it.
-// Skipping costs that one contact and keeps the rest reachable.
-func List(ctx context.Context, conn *proton.Conn) ([]Contact, error) {
+// A contact that cannot be decrypted is skipped rather than failing the
+// listing. The two are not close: a client that gets an error shows no
+// address book at all, so a single unreadable card would hide every readable
+// one behind it. Skipping costs that one contact and keeps the rest
+// reachable.
+//
+// The skipped ids come back rather than disappearing, because a contact that
+// silently goes missing is the kind of fault nobody reports until long after
+// it started.
+func List(ctx context.Context, conn *proton.Conn) ([]Contact, []string, error) {
 	kr, err := conn.ContactKeyRing(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// Two requests rather than one per contact: the listing carries the
@@ -61,7 +67,7 @@ func List(ctx context.Context, conn *proton.Conn) ([]Contact, error) {
 	// each was last changed — which the ETag depends on.
 	index, err := conn.Client.GetAllContacts(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("fetching contacts: %w", err)
+		return nil, nil, fmt.Errorf("fetching contacts: %w", err)
 	}
 
 	modified := make(map[string]int64, len(index))
@@ -71,14 +77,18 @@ func List(ctx context.Context, conn *proton.Conn) ([]Contact, error) {
 
 	exported, err := exportAll(ctx, conn)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	out := make([]Contact, 0, len(exported))
 
+	var unreadable []string
+
 	for _, r := range exported {
 		card, err := r.Cards.Merge(kr)
 		if err != nil {
+			unreadable = append(unreadable, r.ID)
+
 			continue
 		}
 
@@ -90,7 +100,7 @@ func List(ctx context.Context, conn *proton.Conn) ([]Contact, error) {
 		})
 	}
 
-	return out, nil
+	return out, unreadable, nil
 }
 
 // exportedContact is a contact as the export endpoint returns it: the cards,
@@ -208,7 +218,7 @@ func Delete(ctx context.Context, conn *proton.Conn, uid string) (bool, error) {
 }
 
 func findByUID(ctx context.Context, conn *proton.Conn, uid string) (*Contact, error) {
-	all, err := List(ctx, conn)
+	all, _, err := List(ctx, conn)
 	if err != nil {
 		return nil, err
 	}

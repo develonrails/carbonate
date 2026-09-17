@@ -442,8 +442,13 @@ func (b *Backend) PutCalendarObject(ctx context.Context, p string, cal *ical.Cal
 		return nil, webdav.NewHTTPError(http.StatusBadRequest, fmt.Errorf("event has no UID"))
 	}
 
-	if _, _, err := b.store.Put(ctx, id, buf.String()); err != nil {
+	_, created, err := b.store.Put(ctx, id, buf.String())
+	if err != nil {
 		return nil, err
+	}
+
+	if !created {
+		davcompat.MarkReplaced(ctx)
 	}
 
 	// Remember where the client put it, so a later GET or DELETE at that same

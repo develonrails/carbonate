@@ -32,9 +32,15 @@ func cmdContacts(ctx context.Context, args []string, out io.Writer) error {
 	}
 	defer conn.Close()
 
-	all, err := contacts.List(ctx, conn)
+	all, unreadable, err := contacts.List(ctx, conn)
 	if err != nil {
 		return err
+	}
+
+	// Saying nothing here would make a missing contact look like one that was
+	// never there.
+	if len(unreadable) > 0 {
+		fmt.Fprintf(out, "%d contact(s) could not be decrypted and are not listed.\n", len(unreadable))
 	}
 
 	if len(all) == 0 {

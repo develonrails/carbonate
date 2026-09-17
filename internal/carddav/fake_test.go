@@ -15,8 +15,12 @@ type fakeContacts struct {
 
 	listCalls  int
 	tokenCalls int
-	put        []vcard.Card
-	deleted    []string
+
+	// created is what Put reports. Proton decides this by looking for the
+	// UID; the fake is simply told.
+	created bool
+	put     []vcard.Card
+	deleted []string
 
 	err error
 }
@@ -28,6 +32,7 @@ func newFakeContacts() *fakeContacts {
 	card.SetValue(vcard.FieldFormattedName, "Jan Jansen")
 
 	return &fakeContacts{
+		created: true,
 		people: []contacts.Contact{{
 			ID:       "contact-1",
 			UID:      "person@example.com",
@@ -61,7 +66,7 @@ func (f *fakeContacts) Put(_ context.Context, card vcard.Card) (string, bool, er
 		Card:     card,
 	})
 
-	return "new", true, nil
+	return "new", f.created, nil
 }
 
 func (f *fakeContacts) Delete(_ context.Context, uid string) (bool, error) {

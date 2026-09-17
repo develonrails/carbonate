@@ -59,7 +59,7 @@ func Serve(ctx context.Context, conn *proton.Conn, opts Options) error {
 	activity := Stamped(opts.Activity)
 
 	calendars := caldav.New(caldav.Logging(caldav.NewStore(conn), activity))
-	addressBook := carddav.New(carddav.NewStore(conn))
+	addressBook := carddav.New(carddav.NewStore(conn, activity))
 
 	go calendars.Watch(ctx, opts.Watch, activity)
 
