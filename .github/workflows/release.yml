@@ -72,9 +72,10 @@ jobs:
           # actually built from. Editing in place would leave the tag behind on
           # whichever commit first created it, and a tag that points at the
           # wrong source is worse than a few seconds without a release.
-          gh release delete continuous --yes --cleanup-tag || true
+          gh release delete continuous --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
 
           gh release create continuous carbonate-x86_64.flatpak \
+            --repo "$GITHUB_REPOSITORY" \
             --target "$SHA" \
             --prerelease \
             --title "Continuous build" \
