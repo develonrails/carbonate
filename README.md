@@ -171,11 +171,19 @@ password:
 | Calendar | `http://127.0.0.1:8080/caldav/` |
 | Contacts | `http://127.0.0.1:8080/carddav/` |
 
-In GNOME Calendar: **Calendars → Add calendar → Add from web**. Evolution,
-Thunderbird and DAVx5 take the same three values. `/.well-known/caldav` and
-`/.well-known/carddav` both redirect to the right principal.
+On GNOME, **Settings → Online Accounts → Calendar, Contacts and Files** sets
+up both at once. Type the `http://` yourself — left to itself the field
+assumes `https`, which nothing here speaks — and leave Files empty.
 
-GNOME Contacts has no such dialog — see [docs/CLIENTS.md](docs/CLIENTS.md).
+Otherwise, per app: GNOME Calendar takes **Calendars → Add calendar → Add from
+web**, and Evolution, Thunderbird and DAVx5 take the same three values.
+`/.well-known/caldav` and `/.well-known/carddav` both redirect to the right
+principal.
+
+GNOME Contacts has no dialog of its own; it shows whatever Evolution Data
+Server knows about, so the address book has to come from Online Accounts or
+from Evolution. [docs/CLIENTS.md](docs/CLIENTS.md) covers both, and the source
+file to write when neither is available.
 
 Logging in again mints a new bridge password, which every client configured
 with the old one would then reject. `carbonate auth -keep-bridge-password`

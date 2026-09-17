@@ -140,6 +140,64 @@ The change token moves whenever the calendar does. If it moves after you add
 an event in the Proton web app, carbonate is seeing it and the client is the
 problem.
 
+## GNOME Online Accounts
+
+The shortest route, and the only one that sets up the calendar and the address
+book together. **Settings → Online Accounts → Calendar, Contacts and Files**.
+
+| Field | Value |
+|---|---|
+| Server Address | `http://127.0.0.1:8080/` |
+| Username | your Proton address |
+| Password | the bridge password |
+| Files | leave empty |
+| Calendar (CalDAV) | `http://127.0.0.1:8080/caldav/` |
+| Contacts (CardDAV) | `http://127.0.0.1:8080/carddav/` |
+
+Three of those matter more than they look.
+
+**Type `http://` yourself.** The field takes a bare host, and what it makes of
+one is `https://`. carbonate speaks plain HTTP on the loopback interface, so
+the TLS handshake fails and the dialog reports `Cannot find WebDAV endpoint` —
+which reads like carbonate is not there at all.
+
+**Fill the two protocol fields.** carbonate serves the calendar and the address
+book under different paths, so there is no single address both can be
+discovered from.
+
+**Leave Files empty.** carbonate serves no files. GNOME Online Accounts still
+records `FilesEnabled=true`, which leaves GNOME Files trying to mount something
+that will never answer; turn Files off in the account once it is created.
+
+### Moving carbonate to another port
+
+Editing the account is not enough. Evolution derives its own sources from the
+account, but the running registry keeps the ones it already built, and those
+carry the old port — in memory, so nothing on disk shows it. The symptom is
+total silence: the client talks to a port nobody is listening on, and reports
+nothing.
+
+```sh
+pkill -x evolution-source-registry   # D-Bus starts it again
+```
+
+### Cannot find WebDAV endpoint
+
+GNOME Online Accounts asks the bare address whether it is a WebDAV server, with
+`OPTIONS /`, and reads the `DAV` header of the reply. carbonate answers that
+header; a version before v0.1.0 did not, and this dialog was the only place it
+showed. Everything below the root was correct and unreachable, because the
+client stopped at the first question.
+
+If the dialog still refuses, check that carbonate is running and that the port
+matches:
+
+```sh
+curl -i -X OPTIONS http://127.0.0.1:8080/
+```
+
+The reply should carry `Dav: 1, 3, calendar-access, addressbook`.
+
 ## GNOME Calendar
 
 **Calendars → Add calendar → Add from web**, then the URL, your Proton address
@@ -174,11 +232,18 @@ restart.
 ## GNOME Contacts
 
 GNOME Contacts has no dialog for adding an address book. It shows whatever
-Evolution Data Server knows about, and EDS reads that from files in
-`~/.config/evolution/sources/`.
+Evolution Data Server knows about, so the address book has to arrive from
+somewhere else:
 
-Either add the address book in Evolution — both apps share the same EDS, so it
-appears in Contacts — or write the file yourself:
+- **GNOME Online Accounts**, above. This is the one to reach for.
+- **Evolution**, which has the dialog Contacts lacks. Both share the same EDS,
+  so an address book added there appears in Contacts.
+- **A source file**, below, for a machine with neither.
+
+### Writing the source file by hand
+
+EDS reads address books from `~/.config/evolution/sources/`. A file placed
+there is picked up without a restart.
 
 ```ini
 # ~/.config/evolution/sources/carbonate-contacts.source
@@ -217,8 +282,12 @@ Enabled=true
 IntervalMinutes=30
 ```
 
-`chmod 600` it. EDS watches the directory and picks it up without a restart;
-the bridge password is asked for on first use and kept in the keyring.
+`chmod 600` it.
+
+The catch is the password. A source written by hand has never been given one,
+and GNOME Contacts does not ask — it shows an empty address book and stays
+quiet. Only an application that prompts can supply it, which is why the two
+routes above are worth trying first.
 
 The equivalent for a calendar uses `Parent=caldav-stub`, a `[Calendar]` group
 with `BackendName=caldav`, and the calendar's own `ResourcePath` — which you
