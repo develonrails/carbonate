@@ -23,6 +23,7 @@ import (
 
 	"github.com/develonrails/carbonate/internal/cache"
 	"github.com/develonrails/carbonate/internal/calendar"
+	"github.com/develonrails/carbonate/internal/davcompat"
 )
 
 // Paths served.
@@ -75,7 +76,13 @@ func New(store Store) *Backend {
 
 // Handler returns an http.Handler serving CalDAV for this backend.
 func (b *Backend) Handler() http.Handler {
-	return compat(&caldav.Handler{Backend: b, Prefix: prefix}, b.ctag, b.sync)
+	return davcompat.Wrap(&caldav.Handler{Backend: b, Prefix: prefix}, davcompat.Options{
+		SupportedReports: supportedReportSet,
+		CTag:             b.ctag,
+		ServeSync: func(w http.ResponseWriter, r *http.Request) bool {
+			return serveSync(w, r, b.sync)
+		},
+	})
 }
 
 // ctag returns a token that changes whenever anything in the calendar does.

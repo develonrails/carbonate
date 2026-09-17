@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/develonrails/carbonate/internal/davcompat"
 )
 
 func syncRequest(token string) string {
@@ -257,11 +259,13 @@ func TestOtherReportsArePassedThrough(t *testing.T) {
 	req := httptest.NewRequest("REPORT", "/caldav/principal/calendars/abc/", strings.NewReader(query))
 	rec := httptest.NewRecorder()
 
-	compat(inner, nil, func(context.Context, string, string, bool) (syncResult, error) {
-		t.Error("a calendar-query was treated as a sync-collection")
+	davcompat.Wrap(inner, davcompat.Options{ServeSync: func(w http.ResponseWriter, r *http.Request) bool {
+		return serveSync(w, r, func(context.Context, string, string, bool) (syncResult, error) {
+			t.Error("a calendar-query was treated as a sync-collection")
 
-		return syncResult{}, nil
-	}).ServeHTTP(rec, req)
+			return syncResult{}, nil
+		})
+	}}).ServeHTTP(rec, req)
 
 	if !reached {
 		t.Error("the report never reached the handler behind the middleware")

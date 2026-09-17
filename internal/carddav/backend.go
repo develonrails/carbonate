@@ -19,6 +19,7 @@ import (
 
 	"github.com/develonrails/carbonate/internal/cache"
 	"github.com/develonrails/carbonate/internal/contacts"
+	"github.com/develonrails/carbonate/internal/davcompat"
 )
 
 // Paths served. go-webdav derives a resource's kind from path depth, so the
@@ -52,8 +53,23 @@ func New(store Store) *Backend {
 }
 
 // Handler returns an http.Handler serving CardDAV for this backend.
+// addressbook-query and addressbook-multiget are what go-webdav answers.
+// Nothing is claimed that is not served.
+const supportedReportSet = `<supported-report-set xmlns="DAV:">` +
+	`<supported-report><report><addressbook-query xmlns="urn:ietf:params:xml:ns:carddav"/></report></supported-report>` +
+	`<supported-report><report><addressbook-multiget xmlns="urn:ietf:params:xml:ns:carddav"/></report></supported-report>` +
+	`</supported-report-set>`
+
+// Handler returns an http.Handler serving CardDAV for this backend.
+//
+// The same corrections as the calendar: go-webdav reports read and write as
+// one malformed privilege element, which a client reads as read-only, and
+// leaves PUT out of the Allow header. Without them Evolution shows the
+// address book and never writes to it — or syncs it.
 func (b *Backend) Handler() http.Handler {
-	return &carddav.Handler{Backend: b, Prefix: prefix}
+	return davcompat.Wrap(&carddav.Handler{Backend: b, Prefix: prefix}, davcompat.Options{
+		SupportedReports: supportedReportSet,
+	})
 }
 
 func (b *Backend) CurrentUserPrincipal(ctx context.Context) (string, error) {

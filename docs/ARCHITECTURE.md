@@ -99,7 +99,13 @@ The methods are the operations DAV performs, not a window onto the API, which
 keeps the fake in the tests small enough to be obviously right — and means the
 backends can be tested without an account.
 
-### Making a client see a writable calendar
+These corrections live in `internal/davcompat` and are applied to **both**
+protocols. They were written for CalDAV first and not applied to CardDAV,
+which is why the address book stayed read-only and never synced long after the
+calendar worked: Evolution read the single merged privilege element, saw
+`read`, and stopped.
+
+### Making a client see a writable collection
 
 GNOME Calendar connected on the first try but showed the calendar as
 read-only. Two deviations in go-webdav 0.7.0 cause it, and `compat.go`

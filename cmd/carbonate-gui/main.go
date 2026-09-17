@@ -235,7 +235,7 @@ func (u *ui) unlockFromKeyring() {
 		}
 
 		glib.IdleAdd(func() {
-			u.pages.Push(u.servePage(password, true))
+			u.showServing(u.servePage(password, true))
 		})
 	}()
 }
@@ -246,6 +246,16 @@ func (u *ui) remember(bridgePassword string) {
 	if err := session.Remember(u.bridge.sessionPath(), bridgePassword); err != nil {
 		u.say("Could not save the bridge password for next time: %v", err)
 	}
+}
+
+// showServing puts the serve page up in place of whatever led to it.
+//
+// Unlocking and signing in are gates, not destinations: once through, there
+// is nothing to go back to. Pushing left a back button that returned to a
+// screen asking for a password already given, while the bridge carried on
+// serving behind it — and no way forward again without unlocking twice.
+func (u *ui) showServing(page *adw.NavigationPage) {
+	u.pages.Replace([]*adw.NavigationPage{page})
 }
 
 func (u *ui) show() {
@@ -478,7 +488,7 @@ func (u *ui) loginPage() *adw.NavigationPage {
 			u.remember(bridgePassword)
 
 			glib.IdleAdd(func() {
-				u.pages.Push(u.servePage(bridgePassword, false))
+				u.showServing(u.servePage(bridgePassword, false))
 			})
 		}()
 	})
@@ -542,7 +552,7 @@ func (u *ui) unlockPage() *adw.NavigationPage {
 
 			u.remember(entered)
 
-			glib.IdleAdd(func() { u.pages.Push(u.servePage(entered, false)) })
+			glib.IdleAdd(func() { u.showServing(u.servePage(entered, false)) })
 		}()
 	}
 
