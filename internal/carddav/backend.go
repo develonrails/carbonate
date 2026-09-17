@@ -69,7 +69,24 @@ const supportedReportSet = `<supported-report-set xmlns="DAV:">` +
 func (b *Backend) Handler() http.Handler {
 	return davcompat.Wrap(&carddav.Handler{Backend: b, Prefix: prefix}, davcompat.Options{
 		SupportedReports: supportedReportSet,
+		CTag:             b.ctag,
 	})
+}
+
+// ctag returns a token that changes whenever anything in the address book
+// does.
+//
+// Without it a client has no way to tell that a contact was added or changed
+// somewhere else: it fetches the book once, and every poll afterwards finds
+// nothing to compare against and so refetches nothing. Writing from the
+// client still works, which makes the gap look like a one-way bridge rather
+// than a missing property.
+func (b *Backend) ctag(ctx context.Context, p string) (string, error) {
+	if p != bookPath {
+		return "", nil
+	}
+
+	return b.store.ChangeToken(ctx)
 }
 
 func (b *Backend) CurrentUserPrincipal(ctx context.Context) (string, error) {

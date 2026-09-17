@@ -13,9 +13,10 @@ import (
 type fakeContacts struct {
 	people []contacts.Contact
 
-	listCalls int
-	put       []vcard.Card
-	deleted   []string
+	listCalls  int
+	tokenCalls int
+	put        []vcard.Card
+	deleted    []string
 
 	err error
 }
@@ -86,4 +87,21 @@ func (f *fakeContacts) Delete(_ context.Context, uid string) (bool, error) {
 	f.people = kept
 
 	return found, nil
+}
+
+// ChangeToken is derived from the contacts themselves, so that a test which
+// changes one sees the token move without having to maintain it by hand.
+func (f *fakeContacts) ChangeToken(context.Context) (string, error) {
+	f.tokenCalls++
+
+	if f.err != nil {
+		return "", f.err
+	}
+
+	token := ""
+	for _, p := range f.people {
+		token += p.ID + ":" + p.Modified.UTC().Format(time.RFC3339) + " "
+	}
+
+	return token, nil
 }
