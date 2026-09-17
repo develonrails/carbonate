@@ -148,10 +148,7 @@ func uidOf(card vcard.Card, raw api.Contact) string {
 // Put creates a contact, or replaces the one with the same UID. It reports
 // whether the contact was created.
 func Put(ctx context.Context, conn *proton.Conn, card vcard.Card) (id string, created bool, err error) {
-	kr, err := conn.PrimaryAddressKeyRing(ctx)
-	if err != nil {
-		return "", false, err
-	}
+	kr := conn.ContactWriteKeyRing()
 
 	uid := card.Value(vcard.FieldUID)
 	if uid == "" {

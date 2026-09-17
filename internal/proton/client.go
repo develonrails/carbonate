@@ -400,10 +400,22 @@ func (c *Conn) ContactKeyRing(ctx context.Context) (*crypto.KeyRing, error) {
 	return kr, nil
 }
 
-// PrimaryAddressKeyRing unlocks the keys of the account's primary address.
+// ContactWriteKeyRing is what a contact is encrypted and signed with.
 //
-// Writes go to it: Proton attributes a contact to the address that signed it,
-// and this is ours.
+// Proton's own apps use the account's user key for both, and read contacts
+// back with it alone. Writing with the address key instead produces a contact
+// Proton cannot open: its web app shows "The decryption of the encrypted
+// content failed" and offers to discard the data. carbonate could still read
+// what it had written, so nothing looked wrong from this side.
+//
+// Reading stays broader — see ContactKeyRing — because contacts written
+// before this, or by a client that made the same assumption, are still on the
+// address key and should keep opening.
+func (c *Conn) ContactWriteKeyRing() *crypto.KeyRing {
+	return c.UserKR
+}
+
+// PrimaryAddressKeyRing unlocks the keys of the account's primary address.
 func (c *Conn) PrimaryAddressKeyRing(ctx context.Context) (*crypto.KeyRing, error) {
 	addresses, err := c.Client.GetAddresses(ctx)
 	if err != nil {
