@@ -85,13 +85,91 @@ Unattended login reads the answers as successive lines, in the order they are
 asked. The window has a field for it; leaving it empty falls back to the login
 password.
 
+## Watching what the bridge is doing
+
+`carbonate serve -log` reports every DAV request and every change Proton
+sends. Without it the bridge is silent: a request that failed is visible only
+to the client that received the failure, and a client reports that as a
+calendar that will not update, or as nothing at all.
+
+```console
+$ carbonate serve -log
+15:04:38 PROPFIND  /caldav/principal/calendars/12081a3d…/ 207 6ms
+15:04:38 REPORT    /caldav/principal/calendars/12081a3d…/ 207 8ms
+carbonate: calendar 7WcS1DSk…: Proton reports a change (LU4nT24F…)
+carbonate: calendar 7WcS1DSk…: read 14 events from Proton
+carbonate: calendar 7WcS1DSk…: created meeting@example.com
+```
+
+Lines with a time and a status are your client; lines beginning `carbonate:`
+are Proton. An idle bridge only shows the former, because a poll that found
+nothing is not worth a line.
+
+That split is what makes the common reports separable:
+
+| | |
+|---|---|
+| No lines at all | the client is not polling — see below |
+| Requests, but never `Proton reports a change` | the change is not reaching carbonate |
+| `reports a change`, client still empty | the client is not acting on it |
+| A 4xx or 5xx with a reason | that reason is the bug |
+
+One read failure fails the whole collection, so a single event carbonate
+cannot decrypt shows up as every listing returning 500. The log names it.
+
+### Asking carbonate directly
+
+`carbonate calendars -events` reads straight from Proton, past every DAV
+endpoint and every cache — the clearest answer to "is this even arriving?".
+It cannot run while `carbonate serve` has the session, though:
+
+```
+carbonate is already running and using this session; stop it first
+```
+
+So either stop the server first, or ask the running one over its own endpoint:
+
+```sh
+curl -su 'you@proton.me:BRIDGE_PASSWORD' \
+  -X PROPFIND -H 'Depth: 0' -H 'Content-Type: application/xml' \
+  --data '<propfind xmlns="DAV:" xmlns:cs="http://calendarserver.org/ns/"><prop><cs:getctag/></prop></propfind>' \
+  http://127.0.0.1:8080/caldav/principal/calendars/<TOKEN>/
+```
+
+The change token moves whenever the calendar does. If it moves after you add
+an event in the Proton web app, carbonate is seeing it and the client is the
+problem.
+
 ## GNOME Calendar
 
 **Calendars → Add calendar → Add from web**, then the URL, your Proton address
 and the bridge password.
 
 If the calendar appears but is read-only, remove it and add it again: Evolution
-caches what a server said it could do the first time it asked.
+caches what a server said it could do the first time it asked. The same is true
+of `getctag`: one failed request and Evolution stops asking for the rest of the
+session, so after upgrading carbonate, re-add the calendar rather than only
+restarting it.
+
+### New events take up to half an hour to appear
+
+CalDAV has no push. The client polls, and **Add from web** leaves the interval
+at Evolution's default — half an hour. Writing an event is immediate, because
+that is a request the client makes; an event made in the Proton web app waits
+for the next poll. **Calendars → Synchronize** forces one.
+
+GNOME Calendar has no setting for the interval, so it has to go in the source
+file Evolution keeps for the calendar, in `~/.config/evolution/sources/`:
+
+```ini
+[Refresh]
+Enabled=true
+IntervalMinutes=2
+```
+
+A short interval is cheap: carbonate answers a poll that found nothing with one
+request to Proton, and decrypts nothing. Evolution picks the file up without a
+restart.
 
 ## GNOME Contacts
 

@@ -15,13 +15,53 @@ import (
 	"github.com/develonrails/carbonate/internal/proton"
 )
 
+// Options are the choices Serve leaves to its caller.
+//
+// A struct rather than eight parameters: the command line and the GUI both
+// call this, and a positional list that long is one where the two quietly
+// disagree about which string was the password.
+type Options struct {
+	// Addr is the address to listen on. Loopback only.
+	Addr string
+
+	// Username and Password are what a DAV client must present.
+	Username string
+	Password string
+
+	// Out receives the banner naming the addresses to connect to.
+	Out io.Writer
+
+	// Activity receives a line for every DAV request and for every change
+	// Proton reports. It is what `carbonate serve -log` turns on; nil leaves
+	// the bridge silent, and a request that failed visible only to the client
+	// that received the failure.
+	Activity io.Writer
+
+	// Watch is how often to ask Proton whether anything changed, without
+	// waiting for a client to ask first. Zero leaves it to the clients.
+	//
+	// This cannot make a client notice a change any sooner — CalDAV has no
+	// way to tell one to come early. It exists so that a change arriving from
+	// Proton is visible in Activity even when nothing is connected, and so
+	// that the cache is warm when something finally is.
+	Watch time.Duration
+}
+
 // Serve runs the CalDAV and CardDAV server until the context is cancelled.
 //
 // It is shared by the command line and the GUI so that both expose exactly
 // the same server rather than two that drift apart.
-func Serve(ctx context.Context, conn *proton.Conn, addr, username, password string, out io.Writer) error {
-	calendars := caldav.New(caldav.NewStore(conn))
+func Serve(ctx context.Context, conn *proton.Conn, opts Options) error {
+	addr, username, password := opts.Addr, opts.Username, opts.Password
+	out := opts.Out
+
+	// Every line the bridge logs goes through here, so every line is stamped.
+	activity := Stamped(opts.Activity)
+
+	calendars := caldav.New(caldav.Logging(caldav.NewStore(conn), activity))
 	addressBook := carddav.New(carddav.NewStore(conn))
+
+	go calendars.Watch(ctx, opts.Watch, activity)
 
 	mux := http.NewServeMux()
 	mux.Handle("/caldav/", calendars.Handler())
@@ -32,7 +72,7 @@ func Serve(ctx context.Context, conn *proton.Conn, addr, username, password stri
 	mux.Handle("/.well-known/carddav", addressBook.Handler())
 	mux.HandleFunc("/", Index)
 
-	guarded := Authenticated(username, password, mux)
+	guarded := Authenticated(username, password, Logged(mux, activity))
 
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -55,6 +95,8 @@ GNOME Contacts has no such dialog; see docs/CLIENTS.md for the one-file
 address book setup it reads instead.
 `, listener.Addr(), username)
 
+	announce(activity, listener.Addr().String(), opts.Watch)
+
 	done := make(chan error, 1)
 	go func() { done <- server.Serve(listener) }()
 
@@ -74,6 +116,28 @@ address book setup it reads instead.
 
 		return err
 	}
+}
+
+// announce opens the log by saying what will and will not appear in it.
+//
+// An empty log is ambiguous in exactly the wrong way: carbonate only talks to
+// Proton when a client asks it to, so a bridge nobody has connected to yet
+// looks identical to one that cannot see a thing. Saying so costs two lines
+// and answers the question before it is asked.
+func announce(activity io.Writer, addr string, watch time.Duration) {
+	if activity == nil {
+		return
+	}
+
+	fmt.Fprintf(activity, "carbonate: serving on %s\n", addr)
+
+	if watch > 0 {
+		fmt.Fprintf(activity, "carbonate: checking Proton every %s, and whenever an app asks\n", watch)
+
+		return
+	}
+
+	fmt.Fprintln(activity, "carbonate: nothing here until an app connects — carbonate asks Proton only when a client does")
 }
 
 // authenticated guards the handler with HTTP basic auth.

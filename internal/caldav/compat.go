@@ -112,6 +112,15 @@ var (
 	responsePattern = regexp.MustCompile(`(?s)<([\w-]+:)?response\b[^>]*>.*?</([\w-]+:)?response>`)
 
 	hrefPattern = regexp.MustCompile(`(?s)<([\w-]+:)?href\b[^>]*>(.*?)</([\w-]+:)?href>`)
+
+	// propstatPattern matches one propstat element of a response.
+	propstatPattern = regexp.MustCompile(`(?s)<([\w-]+:)?propstat\b[^>]*>.*?</([\w-]+:)?propstat>`)
+
+	// statusPattern matches a status element and captures its status line.
+	statusPattern = regexp.MustCompile(`(?s)<([\w-]+:)?status\b[^>]*>(.*?)</([\w-]+:)?status>`)
+
+	// propClosePattern matches the end of a prop element.
+	propClosePattern = regexp.MustCompile(`</([\w-]+:)?prop>`)
 )
 
 // serveSync answers a sync-collection report, reporting whether it did.
@@ -181,6 +190,13 @@ func fillEmptyProp(body []byte) []byte {
 //
 // Only the collection is touched; the events inside it must be left alone, or
 // a client would treat each one as a collection of its own.
+//
+// The property joins the response's existing successful propstat rather than
+// arriving in one of its own. A propstat per property is legal, and clients
+// that read the whole response are none the wiser, but Evolution Data Server
+// — and so GNOME Calendar — stops at the first one it is shown. A ctag it
+// never reads is a calendar that never refreshes, so the answer has to be
+// where the first look lands.
 func injectProp(body []byte, collection, property string) []byte {
 	want := strings.TrimSuffix(path.Clean(collection), "/")
 
@@ -195,15 +211,72 @@ func injectProp(body []byte, collection, property string) []byte {
 			return response
 		}
 
+		if merged, ok := mergeIntoPropstat(response, property); ok {
+			return merged
+		}
+
+		// Nothing succeeded for this resource, so there is no prop list to
+		// join. Start one, ahead of whatever did not succeed.
 		propstat := `<propstat xmlns="DAV:"><prop xmlns="DAV:">` + property + `</prop><status>HTTP/1.1 200 OK</status></propstat>`
 
-		i := bytes.LastIndex(response, []byte("</"))
-		if i < 0 {
+		end := hrefPattern.FindIndex(response)
+		if end == nil {
 			return response
 		}
 
-		return append(append(append([]byte{}, response[:i]...), []byte(propstat)...), response[i:]...)
+		return concat(response[:end[1]], []byte(propstat), response[end[1]:])
 	})
+}
+
+// mergeIntoPropstat puts property into the prop list of the response's first
+// successful propstat, reporting whether there was one.
+func mergeIntoPropstat(response []byte, property string) ([]byte, bool) {
+	for _, span := range propstatPattern.FindAllIndex(response, -1) {
+		propstat := response[span[0]:span[1]]
+
+		status := statusPattern.FindSubmatch(propstat)
+		if status == nil || !isSuccess(string(status[2])) {
+			continue
+		}
+
+		closing := propClosePattern.FindIndex(propstat)
+		if closing == nil {
+			continue
+		}
+
+		at := span[0] + closing[0]
+
+		return concat(response[:at], []byte(property), response[at:]), true
+	}
+
+	return nil, false
+}
+
+// isSuccess reads a status line the way a client does: 2xx and nothing else.
+func isSuccess(line string) bool {
+	fields := strings.Fields(strings.TrimSpace(html.UnescapeString(line)))
+	if len(fields) < 2 {
+		return false
+	}
+
+	code, err := strconv.Atoi(fields[1])
+	if err != nil {
+		return false
+	}
+
+	return code >= 200 && code < 300
+}
+
+// concat joins byte slices into a new one, so that appending to a subslice of
+// the original cannot overwrite what follows it.
+func concat(parts ...[]byte) []byte {
+	var out []byte
+
+	for _, part := range parts {
+		out = append(out, part...)
+	}
+
+	return out
 }
 
 // recorder buffers the response so the body can be corrected before it is sent,

@@ -244,6 +244,8 @@ func cmdServe(ctx context.Context, args []string, out io.Writer) error {
 	fs.SetOutput(out)
 	addr := fs.String("addr", "127.0.0.1:8080", "address to listen on (localhost only)")
 	path := fs.String("session", "", "path to the session file (default: user config dir)")
+	verbose := fs.Bool("log", false, "report every DAV request, and every change Proton sends")
+	watch := fs.Duration("watch", 0, "how often to ask Proton whether anything changed, without waiting for a client (0 to leave it to them)")
 
 	if err := fs.Parse(reorderArgs(args, serveFlagsWithValues)); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -276,7 +278,21 @@ func cmdServe(ctx context.Context, args []string, out io.Writer) error {
 
 	fmt.Fprintf(out, "Connected as %s.\n", user.Email)
 
-	return server.Serve(ctx, conn, *addr, user.Email, bridgePassword, out)
+	// The log goes where the banner went, so that watching the bridge needs
+	// no second terminal.
+	var activity io.Writer
+	if *verbose {
+		activity = out
+	}
+
+	return server.Serve(ctx, conn, server.Options{
+		Addr:     *addr,
+		Username: user.Email,
+		Password: bridgePassword,
+		Out:      out,
+		Activity: activity,
+		Watch:    *watch,
+	})
 }
 
 func resolvePath(override string) (string, error) {

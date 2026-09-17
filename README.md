@@ -4,6 +4,14 @@ A third-party CalDAV and CardDAV bridge for Proton Calendar and Proton Contacts,
 so standards-compliant clients — Thunderbird, Evolution, Calendar.app, DAVx5 —
 can talk to Proton.
 
+> [!WARNING]
+> **carbonate is a work in progress, and not yet released.** There is no
+> tagged version and nothing on Flathub yet, so there is no upgrade path
+> between builds. It talks to a private API that Proton can change without
+> warning, and it holds the keys to your calendar and contacts. Treat it as
+> something to experiment with, keep a way back to the web app, and expect to
+> re-read this file after pulling.
+
 > **Status: calendars and contacts both work.** `carbonate serve` exposes
 > Proton Calendar over CalDAV and Proton Contacts over CardDAV, reads and
 > writes verified against live Proton, attendees included. See
@@ -58,10 +66,21 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detail.
 ## Install
 
 The Flatpak carries the window, the command-line tool and a recent GTK, so
-there is nothing to build and no GLib version to worry about:
+there is nothing to build and no GLib version to worry about.
+
+**carbonate is not on Flathub yet.** Until it is, take the bundle CI builds
+from the current `main` — [the `continuous`
+release](https://github.com/develonrails/carbonate/releases/tag/continuous):
 
 ```sh
-flatpak install flathub io.github.develonrails.Carbonate
+flatpak install --user carbonate-x86_64.flatpak
+```
+
+That bundle is replaced by every green CI run, so it moves with `main` and
+carries no upgrade guarantees. Once there is a Flathub listing this becomes:
+
+```sh
+flatpak install flathub io.github.develonrails.Carbonate   # not yet available
 ```
 
 Open Carbonate, sign in to Proton once, and press Start. The window shows the
@@ -117,6 +136,7 @@ carbonate event delete      # delete an event by its iCalendar UID
 carbonate contacts          # list contacts; --vcard for the full vCard
 carbonate sessions          # list Proton sessions; -revoke-stale to clear old ones
 carbonate serve             # serve CalDAV and CardDAV on 127.0.0.1:8080
+carbonate serve -log        # ...and report every request and every change
 ```
 
 ```console
@@ -168,6 +188,39 @@ rather than to protect the wire.
 Set `CARBONATE_BRIDGE_PASSWORD` to run unattended, and `CARBONATE_DEBUG=1` to
 dump every request and response when the API misbehaves — it prints access
 tokens, so leave it off otherwise.
+
+### When a calendar will not sync
+
+Start with `carbonate serve -log`, or open **Activity** in the window. The
+bridge is otherwise silent, and a request that failed is visible only to the
+client that received the failure:
+
+```console
+$ carbonate serve -log
+carbonate: calendar 7WcS1DSk…: read 16 events from Proton
+15:18:09 REPORT    /caldav/principal/calendars/12081a3d…/ 207 208ms
+15:18:09 GET       /caldav/…/does-not-exist@x.ics 404 236ms: no event with UID does-not-exist@x
+```
+
+Read it in two halves. Lines with a time and a status are what your client
+asked for; lines beginning `carbonate:` are what Proton sent. That separates
+the two failures that look identical from the outside:
+
+| What the log shows | What it means |
+|---|---|
+| no requests at all | your client is not polling — see [docs/CLIENTS.md](docs/CLIENTS.md) |
+| requests, but never `reports a change` | the change is not reaching carbonate |
+| `reports a change`, client still empty | your client is not acting on it |
+| a 4xx or 5xx, with a reason | that reason is the bug |
+
+**A new event can take half an hour to appear, and that is normal.** CalDAV has
+no push: the client polls, and most default to a long interval. That is the
+most common report by far, and [docs/CLIENTS.md](docs/CLIENTS.md) explains how
+to shorten it.
+
+`CARBONATE_DEBUG=1` dumps the Proton API traffic underneath all of this. It is
+a last resort rather than a first one — it prints access tokens and every
+encrypted payload.
 
 Inviting someone to an event mails them, because at Proton that is what an
 invitation is — the event alone is invisible to anyone who does not already

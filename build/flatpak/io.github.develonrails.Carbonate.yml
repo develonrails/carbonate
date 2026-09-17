@@ -27,6 +27,11 @@ finish-args:
   # Autostart is requested through the background portal at runtime, which
   # needs no static permission — the user is asked, and can say no.
 
+  # The bridge password is kept in the user's keyring rather than beside the
+  # session file it decrypts. Without this, starting at login would come up to
+  # an unlock prompt with nobody there to answer it.
+  - --talk-name=org.freedesktop.secrets
+
 modules:
   - name: carbonate
     buildsystem: simple
