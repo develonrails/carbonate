@@ -118,6 +118,15 @@ corrects both on the way out rather than forking the library:
   PROPFIND before go-webdav sees it — asking for a property it does not know
   earns a 404 propstat that would then have to be unpicked — and the answer is
   added to the response afterwards.
+
+  **A supplied property must join the response's existing successful
+  `propstat`, not arrive in one of its own.** A `propstat` per property is
+  legal, and a client that reads the whole response is none the wiser, but
+  Evolution Data Server — and so GNOME Calendar — stops at the first one it is
+  shown (`e_webdav_session_getctag_cb` and `ecb_caldav_get_collection_props_cb`
+  both return `FALSE`, which ends the traversal). A ctag it never reads is a
+  calendar it refetches in full on every poll; a `supported-report-set` it
+  never reads is `sync-collection` it never asks for.
 - **An empty CardDAV filter matches nothing.** RFC 6352 makes the filter
   optional and an absent one matches everything, but go-webdav reads a filter
   with no conditions as matching nothing. A client that sends no filter would

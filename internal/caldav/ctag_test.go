@@ -253,3 +253,68 @@ func TestCompatDoesNotTouchOtherMethods(t *testing.T) {
 		t.Errorf("a PUT body was rewritten: %q", forwarded)
 	}
 }
+
+// Evolution Data Server — and so GNOME Calendar — reads the collection's
+// properties from the first propstat it is shown and stops there. A ctag in a
+// propstat of its own is a ctag it never sees, and a calendar that never
+// refreshes.
+func TestInjectedPropertiesJoinTheSuccessfulPropstat(t *testing.T) {
+	got := string(injectProp([]byte(twoResponses), "/caldav/principal/calendars/abc/", `<getctag xmlns="http://calendarserver.org/ns/">token-123</getctag>`))
+
+	first := got[:strings.Index(got, "</propstat>")]
+
+	if !strings.Contains(first, "<getctag") {
+		t.Errorf("the ctag was not in the first propstat:\n%s", got)
+	}
+
+	// The property joined a propstat rather than bringing its own.
+	if n := strings.Count(got, "<propstat"); n != strings.Count(twoResponses, "<propstat") {
+		t.Errorf("propstat count changed from %d to %d:\n%s", strings.Count(twoResponses, "<propstat"), n, got)
+	}
+}
+
+// Everything carbonate supplies must land together, or a client that stops
+// after the first propstat learns half of it.
+func TestSuppliedPropertiesArriveTogether(t *testing.T) {
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/xml")
+		w.Write([]byte(twoResponses))
+	})
+
+	request := `<?xml version="1.0"?><d:propfind xmlns:d="DAV:" xmlns:cs="http://calendarserver.org/ns/">` +
+		`<d:prop><cs:getctag/><d:supported-report-set/></d:prop></d:propfind>`
+
+	req := httptest.NewRequest("PROPFIND", "/caldav/principal/calendars/abc/", strings.NewReader(request))
+	rec := httptest.NewRecorder()
+
+	compat(inner, func(context.Context, string) (string, error) { return "token-123", nil }, nil).ServeHTTP(rec, req)
+
+	body, _ := io.ReadAll(rec.Result().Body)
+
+	first := string(body)[:strings.Index(string(body), "</propstat>")]
+
+	for _, want := range []string{"getctag", "sync-collection"} {
+		if !strings.Contains(first, want) {
+			t.Errorf("%s was not in the first propstat:\n%s", want, body)
+		}
+	}
+}
+
+// A resource for which nothing succeeded has no prop list to join, so one is
+// started — ahead of the propstat that failed, which a client may stop at.
+func TestInjectedPropertyLeadsWhenNothingSucceeded(t *testing.T) {
+	failed := `<?xml version="1.0" encoding="UTF-8"?>` +
+		`<multistatus xmlns="DAV:"><response xmlns="DAV:"><href>/caldav/principal/calendars/abc/</href>` +
+		`<propstat xmlns="DAV:"><prop xmlns="DAV:"><displayname xmlns="DAV:"></displayname></prop><status>HTTP/1.1 404 Not Found</status></propstat>` +
+		`</response></multistatus>`
+
+	got := string(injectProp([]byte(failed), "/caldav/principal/calendars/abc/", `<getctag xmlns="http://calendarserver.org/ns/">token-123</getctag>`))
+
+	if !strings.Contains(got[:strings.Index(got, "</propstat>")], "<getctag") {
+		t.Errorf("the ctag did not lead:\n%s", got)
+	}
+
+	if !strings.Contains(got, "404 Not Found") {
+		t.Errorf("the failing propstat was lost:\n%s", got)
+	}
+}
