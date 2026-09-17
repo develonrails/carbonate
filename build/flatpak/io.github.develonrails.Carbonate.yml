@@ -1,0 +1,67 @@
+# Flatpak manifest for local and CI builds.
+#
+# The Flathub submission lives in its own repository and differs in exactly one
+# place: the `dir` source below becomes a `git` source pinned to a release tag.
+# Everything else — runtime, permissions, the offline module list — is shared,
+# so what CI builds here is what Flathub builds there.
+app-id: io.github.develonrails.Carbonate
+
+runtime: org.gnome.Platform
+runtime-version: '50'
+sdk: org.gnome.Sdk
+
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.golang
+
+command: carbonate-gui
+
+finish-args:
+  # Proton is on the internet, and the DAV server binds loopback so that
+  # calendar apps on this machine can reach it. Both need the host's network.
+  - --share=network
+
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+
+  # Autostart is requested through the background portal at runtime, which
+  # needs no static permission — the user is asked, and can say no.
+
+modules:
+  - name: carbonate
+    buildsystem: simple
+
+    build-options:
+      append-path: /usr/lib/sdk/golang/bin
+      env:
+        # Offline: every dependency is unpacked into vendor/ by the sources
+        # below, because Flathub builds have no network.
+        GOFLAGS: -mod=vendor
+        GOCACHE: /run/build/carbonate/.gocache
+        # The SDK's Go is the one to use. Without this it would try to fetch
+        # the toolchain named in go.mod, which is the one thing it cannot do.
+        GOTOOLCHAIN: local
+        CGO_ENABLED: '1'
+
+    build-commands:
+      # The window, and the same server behind it.
+      - go build -tags gtk -o carbonate-gui ./cmd/carbonate-gui
+      # The command-line tool, for people who would rather not have a window.
+      - go build -o carbonate ./cmd/carbonate
+
+      - install -Dm755 carbonate-gui /app/bin/carbonate-gui
+      - install -Dm755 carbonate /app/bin/carbonate
+      - install -Dm644 build/flatpak/io.github.develonrails.Carbonate.desktop
+        /app/share/applications/io.github.develonrails.Carbonate.desktop
+      - install -Dm644 build/flatpak/io.github.develonrails.Carbonate.metainfo.xml
+        /app/share/metainfo/io.github.develonrails.Carbonate.metainfo.xml
+      - install -Dm644 build/flatpak/io.github.develonrails.Carbonate.svg
+        /app/share/icons/hicolor/scalable/apps/io.github.develonrails.Carbonate.svg
+
+    sources:
+      - type: dir
+        path: ../..
+
+      # Every module as a zip from the Go proxy, unpacked into vendor/.
+      # Regenerate with `flatpak-go-mod .` after changing dependencies.
+      - go.mod.yml

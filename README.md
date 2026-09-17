@@ -57,10 +57,49 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detail.
 
 ## Install
 
+The Flatpak carries the window, the command-line tool and a recent GTK, so
+there is nothing to build and no GLib version to worry about:
+
+```sh
+flatpak install flathub io.github.develonrails.Carbonate
+```
+
+Open Carbonate, sign in to Proton once, and press Start. The window shows the
+address and the bridge password to give your calendar app. Turning on **Start
+at login** asks your system for permission to run in the background, so the
+bridge is already there the next time your apps look for it — you can withdraw
+that later in your system's background app settings.
+
+Signing in is the one step that cannot be automated: Proton asks for your
+password, possibly a second factor, and occasionally a human-verification
+challenge. Everything after it runs unattended.
+
+### From source
+
 Requires Go 1.26 or newer.
 
 ```sh
 make build      # or: go build ./cmd/carbonate
+```
+
+### Building the Flatpak yourself
+
+```sh
+flatpak install flathub org.flatpak.Builder org.gnome.Sdk//50 \
+    org.freedesktop.Sdk.Extension.golang//25.08
+cd build/flatpak
+flatpak run org.flatpak.Builder --force-clean --user --install builddir \
+    io.github.develonrails.Carbonate.yml
+```
+
+Flathub builds with no network, so every dependency is listed in
+`build/flatpak/go.mod.yml` as a module zip and unpacked into `vendor/`. After
+changing a dependency, regenerate it:
+
+```sh
+go install github.com/dennwc/flatpak-go-mod@latest
+flatpak-go-mod .                        # writes go.mod.yml and modules.txt
+mv go.mod.yml modules.txt build/flatpak/
 ```
 
 ## Usage

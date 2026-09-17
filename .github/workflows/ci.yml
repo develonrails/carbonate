@@ -48,3 +48,25 @@ jobs:
 
       - name: Build the GUI
         run: CGO_ENABLED=1 go build -tags gtk ./cmd/carbonate-gui
+
+  # The Flatpak is how most people will actually install carbonate, so a
+  # manifest that stopped building would be found by a user rather than here.
+  #
+  # This is the same manifest Flathub builds, minus the source: there it comes
+  # from a release tag, here from the checkout. Everything that can break —
+  # the runtime version, the offline module list, the GTK build — is shared.
+  flatpak:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-50
+      # flatpak-builder needs to set up its own sandbox, which it cannot do
+      # from inside an unprivileged container.
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: flathub-infra/flatpak-github-actions/flatpak-builder@master
+        with:
+          bundle: carbonate.flatpak
+          manifest-path: build/flatpak/io.github.develonrails.Carbonate.yml
+          cache-key: flatpak-builder-${{ github.sha }}

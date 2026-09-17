@@ -10,3 +10,10 @@ calcache-*.json
 /state/
 /coverage.out
 /carbonate-gui
+
+# Flatpak build output. The manifest and the generated module list are kept;
+# what flatpak-builder makes from them is not.
+/build/flatpak/.flatpak-builder/
+/build/flatpak/builddir/
+/build/flatpak/repo/
+/build/flatpak/*.flatpak

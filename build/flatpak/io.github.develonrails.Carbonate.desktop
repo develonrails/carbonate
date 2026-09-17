@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Carbonate
+GenericName=Proton Calendar and Contacts Bridge
+Comment=Serve your Proton calendars and contacts to any CalDAV or CardDAV app
+Categories=Office;Calendar;
+Keywords=proton;calendar;contacts;caldav;carddav;bridge;sync;
+Exec=carbonate-gui
+Icon=io.github.develonrails.Carbonate
+Terminal=false
+Type=Application
+StartupNotify=true
+X-GNOME-UsesNotifications=true

@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.develonrails.Carbonate</id>
+
+  <name>Carbonate</name>
+  <summary>Serve Proton calendars and contacts to any CalDAV app</summary>
+
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+
+  <developer id="io.github.develonrails">
+    <name>Mitchell de Jong</name>
+  </developer>
+
+  <description>
+    <p>
+      Proton Calendar and Proton Contacts are encrypted, which is the point of
+      them and also why no ordinary calendar app can read them. Carbonate logs
+      in to Proton, decrypts your calendars and contacts locally, and serves
+      them on your own machine as CalDAV and CardDAV — the protocols every
+      calendar app already speaks.
+    </p>
+    <p>
+      Point GNOME Calendar, Evolution, Thunderbird or anything else at it and
+      your Proton calendar behaves like any other. Events you create or edit
+      travel back to Proton, encrypted again before they leave.
+    </p>
+    <p>Carbonate is not affiliated with Proton AG.</p>
+    <p>What it does:</p>
+    <ul>
+      <li>Two-way sync: read your calendars, and write events back</li>
+      <li>Contacts over CardDAV, decrypted locally</li>
+      <li>Recurring events, exceptions to a series, and reminders</li>
+      <li>Guests are invited by mail, the way Proton does it</li>
+      <li>Nothing leaves your machine unencrypted, and nothing is sent anywhere but Proton</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">io.github.develonrails.Carbonate.desktop</launchable>
+
+  <url type="homepage">https://github.com/develonrails/carbonate</url>
+  <url type="bugtracker">https://github.com/develonrails/carbonate/issues</url>
+  <url type="vcs-browser">https://github.com/develonrails/carbonate</url>
+
+  <categories>
+    <category>Office</category>
+    <category>Calendar</category>
+  </categories>
+
+  <keywords>
+    <keyword>proton</keyword>
+    <keyword>calendar</keyword>
+    <keyword>contacts</keyword>
+    <keyword>caldav</keyword>
+    <keyword>carddav</keyword>
+    <keyword>sync</keyword>
+  </keywords>
+
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+
+  <branding>
+    <color type="primary" scheme_preference="light">#d9d3ff</color>
+    <color type="primary" scheme_preference="dark">#3b3663</color>
+  </branding>
+
+  <content_rating type="oars-1.1"/>
+
+  <releases>
+    <release version="0.1.0" date="2026-09-16">
+      <description>
+        <p>First release.</p>
+      </description>
+    </release>
+  </releases>
+</component>
