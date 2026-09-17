@@ -369,10 +369,41 @@ func verifyAndRetry(ctx context.Context, m *api.Manager, username string, passwo
 	return m.NewClientWithLoginWithHVToken(ctx, username, password, solved(details, token))
 }
 
+// ContactKeyRing unlocks everything a contact might be encrypted to: the
+// primary address keys and the account's own user keys.
+//
+// Which of the two Proton picks depends on the client that wrote the contact.
+// The web app encrypts to the user key; the keys carbonate was built against
+// are the address ones. A keyring holding both reads either, and OpenPGP
+// picks the matching key by its id, so nothing has to guess.
+//
+// Getting this wrong is not a contact that arrives blank — it is a hard
+// decryption failure, and the listing stops at it. One unreadable card takes
+// the whole address book down with it.
+func (c *Conn) ContactKeyRing(ctx context.Context) (*crypto.KeyRing, error) {
+	addrKR, err := c.PrimaryAddressKeyRing(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	kr, err := crypto.NewKeyRing(nil)
+	if err != nil {
+		return nil, fmt.Errorf("building the contact keyring: %w", err)
+	}
+
+	for _, key := range append(addrKR.GetKeys(), c.UserKR.GetKeys()...) {
+		if err := kr.AddKey(key); err != nil {
+			return nil, fmt.Errorf("building the contact keyring: %w", err)
+		}
+	}
+
+	return kr, nil
+}
+
 // PrimaryAddressKeyRing unlocks the keys of the account's primary address.
 //
-// Contacts are encrypted to it rather than to a per-collection key, so this is
-// the keyring that reads and writes them.
+// Writes go to it: Proton attributes a contact to the address that signed it,
+// and this is ours.
 func (c *Conn) PrimaryAddressKeyRing(ctx context.Context) (*crypto.KeyRing, error) {
 	addresses, err := c.Client.GetAddresses(ctx)
 	if err != nil {

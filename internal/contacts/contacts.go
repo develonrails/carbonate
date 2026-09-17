@@ -44,9 +44,14 @@ type Contact struct {
 	Card     vcard.Card
 }
 
-// List returns every contact, decrypted.
+// List returns every contact that can be decrypted.
+//
+// A contact that cannot be is skipped rather than failing the listing. The
+// two are not close: a client that gets an error shows no address book at
+// all, so a single unreadable card would hide every readable one behind it.
+// Skipping costs that one contact and keeps the rest reachable.
 func List(ctx context.Context, conn *proton.Conn) ([]Contact, error) {
-	kr, err := conn.PrimaryAddressKeyRing(ctx)
+	kr, err := conn.ContactKeyRing(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -74,7 +79,7 @@ func List(ctx context.Context, conn *proton.Conn) ([]Contact, error) {
 	for _, r := range exported {
 		card, err := r.Cards.Merge(kr)
 		if err != nil {
-			return nil, fmt.Errorf("decrypting contact %s: %w", r.ID, err)
+			continue
 		}
 
 		out = append(out, Contact{
