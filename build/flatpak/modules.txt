@@ -161,6 +161,18 @@ github.com/cloudwego/base64x/internal/rt
 # github.com/cronokirby/saferith v0.33.0
 ## explicit; go 1.15
 github.com/cronokirby/saferith
+# github.com/danieljoos/wincred v1.2.3
+## explicit; go 1.18
+github.com/danieljoos/wincred
+# github.com/davecgh/go-spew v1.1.1
+## explicit
+# github.com/diamondburned/gotk4 v0.4.0
+## explicit; go 1.24.0
+# github.com/diamondburned/gotk4-adwaita v0.0.0-20260808200908-d4aecaa0ff32
+## explicit; go 1.24.0
+# github.com/diamondburned/gotk4-adwaita/pkg v0.0.0-20260808200908-d4aecaa0ff32
+## explicit; go 1.24.0
+github.com/diamondburned/gotk4-adwaita/pkg/adw
 # github.com/diamondburned/gotk4/pkg v0.4.1
 ## explicit; go 1.24.0
 github.com/diamondburned/gotk4/pkg/cairo
@@ -201,6 +213,8 @@ github.com/emersion/go-webdav
 github.com/emersion/go-webdav/caldav
 github.com/emersion/go-webdav/carddav
 github.com/emersion/go-webdav/internal
+# github.com/fatih/color v1.10.0
+## explicit; go 1.13
 # github.com/gabriel-vasile/mimetype v1.4.12
 ## explicit; go 1.21
 github.com/gabriel-vasile/mimetype
@@ -256,6 +270,9 @@ github.com/goccy/go-yaml/parser
 github.com/goccy/go-yaml/printer
 github.com/goccy/go-yaml/scanner
 github.com/goccy/go-yaml/token
+# github.com/godbus/dbus/v5 v5.2.2
+## explicit; go 1.20
+github.com/godbus/dbus/v5
 # github.com/google/uuid v1.6.0
 ## explicit
 github.com/google/uuid
@@ -269,6 +286,8 @@ github.com/klauspost/cpuid/v2
 ## explicit; go 1.18
 github.com/leodido/go-urn
 github.com/leodido/go-urn/scim/schema
+# github.com/mattn/go-colorable v0.1.8
+## explicit; go 1.13
 # github.com/mattn/go-isatty v0.0.20
 ## explicit; go 1.15
 github.com/mattn/go-isatty
@@ -339,6 +358,11 @@ github.com/twitchyliquid64/golang-asm/unsafeheader
 # github.com/ugorji/go/codec v1.3.1
 ## explicit; go 1.21
 github.com/ugorji/go/codec
+# github.com/zalando/go-keyring v0.2.8
+## explicit; go 1.18
+github.com/zalando/go-keyring
+github.com/zalando/go-keyring/internal/shellescape
+github.com/zalando/go-keyring/secret_service
 # gitlab.com/c0b/go-ordered-json v0.0.0-20201030195603-febf46534d5a
 ## explicit
 gitlab.com/c0b/go-ordered-json

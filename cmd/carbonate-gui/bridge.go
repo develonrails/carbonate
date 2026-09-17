@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/develonrails/carbonate/internal/proton"
 	"github.com/develonrails/carbonate/internal/server"
@@ -39,6 +40,13 @@ func newBridge() *bridge {
 	}
 
 	return &bridge{path: path}
+}
+
+// sessionPath is where the encrypted session lives. It is the key the bridge
+// password is remembered under, because the account it belongs to is inside
+// the file and cannot be read without that very password.
+func (b *bridge) sessionPath() string {
+	return b.path
 }
 
 func (b *bridge) hasSession() bool {
@@ -191,7 +199,12 @@ func (b *bridge) running() bool {
 }
 
 // start serves CalDAV and CardDAV until stop is called.
-func (b *bridge) start(address string) error {
+//
+// activity receives the server's log, which the window shows: someone running
+// the window has no terminal to read it in. watch is how often to ask Proton
+// whether anything changed, so that the log says something even when no client
+// is connected.
+func (b *bridge) start(address string, activity io.Writer, watch time.Duration) error {
 	b.mu.Lock()
 
 	if b.conn == nil {
@@ -220,7 +233,14 @@ func (b *bridge) start(address string) error {
 	go func() {
 		defer close(done)
 
-		failed <- server.Serve(ctx, conn, address, email, password, io.Discard)
+		failed <- server.Serve(ctx, conn, server.Options{
+			Addr:     address,
+			Username: email,
+			Password: password,
+			Out:      io.Discard,
+			Activity: activity,
+			Watch:    watch,
+		})
 	}()
 
 	select {
