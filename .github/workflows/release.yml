@@ -1,0 +1,81 @@
+name: Release
+
+# A Flatpak bundle is the only form of carbonate most people will ever run, so
+# the newest one has to be somewhere they can reach without a Go toolchain.
+# Until there is a tagged version on Flathub, that place is a rolling
+# pre-release here.
+#
+# This waits on CI rather than running alongside it: a bundle published from a
+# commit whose tests then failed is worse than no bundle at all. CI already
+# builds the bundle, so this only moves it — nothing is compiled twice.
+#
+# workflow_run only fires for workflows on the default branch, so this file
+# does nothing until it is on main.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: write
+
+# Two merges in quick succession would otherwise race to replace the same
+# release, and the loser would leave the older bundle behind.
+concurrency:
+  group: continuous-release
+  cancel-in-progress: false
+
+jobs:
+  continuous:
+    # "completed" includes failed, cancelled and timed out.
+    if: github.event.workflow_run.conclusion == 'success'
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Take the bundle CI already built
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download "${{ github.event.workflow_run.id }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name carbonate-x86_64.flatpak \
+            --dir bundle
+
+          # The artifact is named for the architecture; the file inside it is
+          # not. Users download the file, so it is the one that needs saying.
+          mv bundle/carbonate.flatpak carbonate-x86_64.flatpak
+
+      - name: Replace the rolling release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+
+          notes=$(cat <<NOTES
+          The current state of \`main\`, built and tested by CI — **not a tagged
+          release**. It is replaced by every green run, so the file behind this
+          link changes without notice and carries no upgrade guarantees.
+
+          Built from [\`${SHA:0:7}\`](https://github.com/$GITHUB_REPOSITORY/commit/$SHA)
+          on $(date -u '+%Y-%m-%d %H:%M UTC').
+
+          \`\`\`sh
+          flatpak install --user carbonate-x86_64.flatpak
+          \`\`\`
+          NOTES
+          )
+
+          # Deleting and recreating keeps the tag on the commit the bundle was
+          # actually built from. Editing in place would leave the tag behind on
+          # whichever commit first created it, and a tag that points at the
+          # wrong source is worse than a few seconds without a release.
+          gh release delete continuous --yes --cleanup-tag || true
+
+          gh release create continuous carbonate-x86_64.flatpak \
+            --target "$SHA" \
+            --prerelease \
+            --title "Continuous build" \
+            --notes "$notes"
