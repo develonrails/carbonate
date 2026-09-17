@@ -77,7 +77,10 @@ func requestAutostart(ctx context.Context, want bool, done func(granted bool, er
 		// Named explicitly because the portal writes it into the autostart
 		// file, and the file outlives this process. The desktop file is not
 		// consulted: what gets started is what we say here.
-		"commandline": glib.NewVariantStrv([]string{"carbonate-gui"}),
+		// --background so that starting at login does not put a window on
+		// screen. Someone who wanted the bridge running at login did not ask
+		// to be shown it.
+		"commandline": glib.NewVariantStrv([]string{"carbonate-gui", "--background"}),
 	})
 
 	conn.Call(ctx, portalBus, portalPath, backgroundIface, "RequestBackground",

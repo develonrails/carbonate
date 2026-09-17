@@ -29,6 +29,8 @@ import (
 const appID = "io.github.develonrails.Carbonate"
 
 func main() {
+	background, args := takeBackgroundFlag(os.Args)
+
 	app := adw.NewApplication(appID, gio.ApplicationFlagsNone)
 
 	// Activating again — from the launcher, or by starting a second copy —
@@ -38,15 +40,47 @@ func main() {
 
 	app.ConnectActivate(func() {
 		if window == nil {
-			window = newUI(app)
+			window = newUI(app, background)
+		}
+
+		// Started at login: serve, and stay off the screen. GApplication
+		// would otherwise quit an application with no window, so it is held
+		// open explicitly.
+		if window.hidden {
+			app.Hold()
+
+			return
 		}
 
 		window.show()
 	})
 
-	if code := app.Run(os.Args); code > 0 {
+	if code := app.Run(args); code > 0 {
 		os.Exit(code)
 	}
+}
+
+// backgroundFlag asks for a start with no window, and is what the autostart
+// entry carries.
+const backgroundFlag = "--background"
+
+// takeBackgroundFlag removes the flag before GApplication sees it, since it
+// parses what is left and refuses what it does not know.
+func takeBackgroundFlag(argv []string) (bool, []string) {
+	background := false
+	rest := make([]string, 0, len(argv))
+
+	for _, arg := range argv {
+		if arg == backgroundFlag {
+			background = true
+
+			continue
+		}
+
+		rest = append(rest, arg)
+	}
+
+	return background, rest
 }
 
 // watchChoices are how often carbonate may ask Proton whether anything has
@@ -102,14 +136,18 @@ type ui struct {
 
 	// Rebuilt when the bridge starts, so the serve page can show what a
 	// client needs without being reconstructed.
+	// hidden is set when carbonate was started at login, and cleared the
+	// moment anything needs a person.
+	hidden bool
+
 	bridgePassword *adw.ActionRow
 	calendarRow    *adw.ActionRow
 	contactsRow    *adw.ActionRow
 	watch          *adw.ComboRow
 }
 
-func newUI(app *adw.Application) *ui {
-	u := &ui{app: app, bridge: newBridge(), activity: newActivity(), prefs: loadPrefs()}
+func newUI(app *adw.Application, background bool) *ui {
+	u := &ui{app: app, bridge: newBridge(), activity: newActivity(), prefs: loadPrefs(), hidden: background}
 
 	u.window = adw.NewApplicationWindow(&app.Application)
 	u.window.SetTitle("Carbonate")
@@ -147,9 +185,27 @@ func newUI(app *adw.Application) *ui {
 		u.unlockFromKeyring()
 	} else {
 		u.pages.Push(u.loginPage())
+
+		// Nothing to start from, so there is nothing to be quiet about.
+		u.reveal()
 	}
 
 	return u
+}
+
+// reveal puts the window on screen, and stops it being kept off.
+//
+// Starting at login is only worth doing silently while it works. An
+// application holding itself open with no window and nothing serving is one
+// nobody can find, so every path that cannot serve ends here.
+func (u *ui) reveal() {
+	if !u.hidden {
+		return
+	}
+
+	u.hidden = false
+
+	u.window.Present()
 }
 
 // unlockFromKeyring opens the session with the remembered password and starts
@@ -166,11 +222,15 @@ func newUI(app *adw.Application) *ui {
 func (u *ui) unlockFromKeyring() {
 	password, found, err := session.Recall(u.bridge.sessionPath())
 	if err != nil || !found {
+		u.reveal()
+
 		return
 	}
 
 	go func() {
 		if err := u.bridge.unlock(context.Background(), password); err != nil {
+			glib.IdleAdd(func() { u.reveal() })
+
 			return
 		}
 
