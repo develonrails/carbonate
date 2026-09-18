@@ -458,7 +458,39 @@ func (b *Backend) QueryCalendarObjects(ctx context.Context, p string, query *cal
 		return nil, err
 	}
 
-	return caldav.Filter(query, objects)
+	if query == nil {
+		return objects, nil
+	}
+
+	id, err := b.calendarID(ctx, p)
+	if err != nil {
+		return nil, err
+	}
+
+	// Matched one at a time rather than through caldav.Filter, which returns
+	// the first error and discards every object it had already matched.
+	//
+	// Deciding whether an event falls in a time range means parsing its dates
+	// and expanding its recurrence rule, and either can fail on a single
+	// malformed event. This is the report a client uses to find out what is
+	// there, so one such event failing it is a calendar that downsyncs
+	// nothing — the same ending as the other two, reached a third way.
+	out := make([]caldav.CalendarObject, 0, len(objects))
+
+	for i := range objects {
+		matched, err := caldav.Match(query.CompFilter, &objects[i])
+		if err != nil {
+			b.cannotServe(id, objects[i].Path, err)
+
+			continue
+		}
+
+		if matched {
+			out = append(out, objects[i])
+		}
+	}
+
+	return out, nil
 }
 
 func (b *Backend) PutCalendarObject(ctx context.Context, p string, cal *ical.Calendar, opts *caldav.PutCalendarObjectOptions) (*caldav.CalendarObject, error) {

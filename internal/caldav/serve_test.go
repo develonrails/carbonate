@@ -341,3 +341,54 @@ func TestUnrenderableEventIsSkippedAndNamed(t *testing.T) {
 		t.Errorf("the same event was named twice:\n%s", log.String())
 	}
 }
+
+// The third way one event could empty a calendar, and the one that matters
+// most: calendar-query is the report Evolution — and so GNOME Calendar — uses
+// to find out what is in a collection.
+//
+// Deciding whether an event falls in the queried range means parsing its dates
+// and expanding its recurrence rule. go-webdav's Filter returns the first
+// error and drops everything it had already matched, so one malformed event
+// answered the whole report with a 500 and the client downsynced nothing.
+func TestBadEventDoesNotFailTheWholeQuery(t *testing.T) {
+	fake := newFake()
+	fake.events["cal-1"] = append(fake.events["cal-1"], calendar.Event{
+		ID:         "event-2",
+		UID:        "baddate@example.com",
+		Modified:   time.Unix(1000, 0),
+		Properties: []string{"UID:baddate@example.com", "DTSTART:not-a-date"},
+	})
+
+	var log bytes.Buffer
+
+	b := New(fake, &log)
+	path := calendarPath(t, b)
+
+	query := &caldav.CalendarQuery{
+		CompFilter: caldav.CompFilter{
+			Name: "VCALENDAR",
+			Comps: []caldav.CompFilter{{
+				Name:  "VEVENT",
+				Start: mustTime("2026-09-01T00:00:00Z"),
+				End:   mustTime("2026-10-01T00:00:00Z"),
+			}},
+		},
+	}
+
+	got, err := b.QueryCalendarObjects(context.Background(), path, query)
+	if err != nil {
+		t.Fatalf("one unmatchable event failed the whole query: %v", err)
+	}
+
+	if len(got) != 1 {
+		t.Fatalf("query returned %d objects, want the 1 that could be matched", len(got))
+	}
+
+	if !strings.Contains(got[0].Path, "meeting@example.com") {
+		t.Errorf("returned %q, want the readable event", got[0].Path)
+	}
+
+	if !strings.Contains(log.String(), "baddate@example.com") {
+		t.Errorf("the skipped event was not named:\n%s", log.String())
+	}
+}
