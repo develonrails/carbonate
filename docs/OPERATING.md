@@ -3,6 +3,53 @@
 Everything here is about the bridge itself rather than the clients that connect
 to it. For those, see [SETUP.md](SETUP.md).
 
+## Staying up to date
+
+carbonate is installed from a Flatpak repository, so it updates like anything
+else:
+
+```sh
+flatpak update io.github.develonrails.Carbonate
+```
+
+GNOME Software offers the same update; there is nothing to download by hand.
+Every green CI run on `main` publishes a new build, so an update can bring
+anything that has landed since — see the warning at the top of the
+[README](../README.md).
+
+Stop the bridge before updating. A running `carbonate serve` holds the session
+lock, and the replaced binary will not take over from it until it is restarted
+anyway.
+
+### Moving off a bundle
+
+If you installed the single-file bundle rather than the repository, none of the
+above works, and it fails quietly: `flatpak update` answers **"Nothing to
+update."** and leaves you on the build you have. There is nothing to update
+from — a bundle install invents a hidden origin with no URL behind it.
+
+Adding the repository is not enough on its own either:
+
+```
+error: io.github.develonrails.Carbonate/x86_64/master is already installed
+from remote carbonate-origin
+```
+
+Point the existing install at the repository instead:
+
+```sh
+flatpak install --user --reinstall \
+    carbonate io.github.develonrails.Carbonate
+```
+
+That switches the origin, after which ordinary updates work. It is worth
+checking which one you have — a bundle install reports its hidden origin, and
+an update that never arrives looks exactly like a project that stopped moving:
+
+```sh
+flatpak info --user io.github.develonrails.Carbonate | grep Origin
+```
+
 ## Keep the bridge password
 
 `carbonate auth` generates a new bridge password every time, and every client

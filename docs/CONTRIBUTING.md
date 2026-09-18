@@ -112,12 +112,72 @@ mv go.mod.yml modules.txt build/flatpak/
 
 Three jobs. `test` runs the suite with no C toolchain, which is the point of
 the build tag. `gui` builds the window on a container with the GTK headers.
-`flatpak` builds the bundle.
+`flatpak` builds the app, keeping both the OSTree repository it exports on the
+way and the single-file bundle made from it.
 
-A green run on `main` publishes that bundle to the rolling `continuous`
-release, replacing whatever was there. The release job waits on CI rather than
-running alongside it: a bundle published from a commit whose tests then failed
-is worse than no bundle at all.
+The release job waits on CI rather than running alongside it: a build published
+from a commit whose tests then failed is worse than no build at all.
+
+## How a build reaches people
+
+A green run on `main` promotes that build into the Flatpak repository served
+from GitHub Pages, and replaces the bundle on the rolling `continuous` release.
+
+The repository is the route people install from; the bundle is a fallback for
+anyone who would rather not add a remote. That order matters, and it used to be
+the other way round:
+
+- A bundle is a file, not a remote, so `flatpak update` has nothing to pull
+  from.
+- Every build is the same ref at the same version — `master`, 0.1.0, since
+  nothing bumps a version between CI runs — so a second `flatpak install` stops
+  at "already installed".
+- GNOME Software refuses a bundle outright, failing to invent an origin remote
+  for the debug extension it declares.
+
+A repository has none of these, because OSTree tells builds apart by commit
+rather than by version. The three symptoms had one cause, and it was the
+bundle.
+
+The promotion uses `flatpak build-commit-from`, which commits the new build
+into the published repository with the previous release as its parent. A plain
+pull would move the ref to a commit with nothing behind it, and a client that
+already has the old one has no path from where it is to where that is.
+
+The `gh-pages` branch is force-pushed as a fresh orphan commit each time. The
+repository keeps its own history inside OSTree, so a git history of it as well
+would grow every clone without bound and serve nobody.
+
+### The signing key
+
+Builds are signed, and the public half travels inside
+`carbonate.flatpakrepo`, so adding the remote is also what establishes trust.
+The private half lives in the `FLATPAK_GPG_PRIVATE_KEY` repository secret, and
+nothing publishes without it — the release job stops if it is unset.
+
+To create one, or to roll it:
+
+```sh
+export GNUPGHOME=$(mktemp -d) && chmod 700 "$GNUPGHOME"
+
+gpg --batch --gen-key <<KEY
+%no-protection
+Key-Type: eddsa
+Key-Curve: Ed25519
+Key-Usage: sign
+Name-Real: carbonate repository signing
+Name-Email: carbonate@develonrails.github.io
+Expire-Date: 0
+%commit
+KEY
+
+gpg --export-secret-keys --armor | base64 -w0 |
+    gh secret set FLATPAK_GPG_PRIVATE_KEY --repo develonrails/carbonate
+```
+
+Rolling it re-signs everything on the next run, but a client that already
+trusts the old key will refuse the new signatures: `flatpak remote-delete
+carbonate` and add it again. Worth avoiding for that reason alone.
 
 ## Dependencies
 

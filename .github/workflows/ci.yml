@@ -70,3 +70,18 @@ jobs:
           bundle: carbonate.flatpak
           manifest-path: build/flatpak/io.github.develonrails.Carbonate.yml
           cache-key: flatpak-builder-${{ github.sha }}
+
+      # flatpak-builder exports into an OSTree repo on its way to the bundle,
+      # and that repo is what people actually install from. Keeping it means
+      # the release job can promote this exact build rather than rebuild it.
+      #
+      # Tarred because the repo is thousands of small objects, and uploading
+      # them one by one takes longer than the build did.
+      - name: Keep the OSTree repo this build produced
+        run: tar -cf carbonate-repo.tar repo
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: carbonate-repo
+          path: carbonate-repo.tar
+          retention-days: 1

@@ -6,11 +6,11 @@ can talk to Proton.
 
 > [!WARNING]
 > **carbonate is a work in progress, and not yet released.** There is no
-> tagged version and nothing on Flathub yet, so there is no upgrade path
-> between builds. It talks to a private API that Proton can change without
-> warning, and it holds the keys to your calendar and contacts. Treat it as
-> something to experiment with, keep a way back to the web app, and expect to
-> re-read this file after pulling.
+> tagged version and nothing on Flathub yet: installing tracks `main`, so an
+> update can bring anything that landed since. It talks to a private API that
+> Proton can change without warning, and it holds the keys to your calendar
+> and contacts. Treat it as something to experiment with, keep a way back to
+> the web app, and expect to re-read this file after pulling.
 
 > **Status: calendars and contacts both work**, in both directions, verified
 > against a live Proton account — attendees, reminders, recurring events and
@@ -73,23 +73,32 @@ the detail, including the ways Proton rejects a bad write.
 The Flatpak carries the window, the command-line tool and a recent GTK, so
 there is nothing to build and no GLib version to worry about.
 
-**carbonate is not on Flathub yet.** Until it is, take the bundle CI builds
-from the current `main` — [the `continuous`
-release](https://github.com/develonrails/carbonate/releases/tag/continuous):
+**carbonate is not on Flathub yet.** Until it is, add the repository CI
+publishes from the current `main`:
 
 ```sh
-flatpak install --user --or-update carbonate-x86_64.flatpak
+flatpak remote-add --user --if-not-exists --from \
+    carbonate https://develonrails.github.io/carbonate/carbonate.flatpakrepo
+
+flatpak install --user carbonate io.github.develonrails.Carbonate
 ```
 
-That bundle is replaced by every green CI run, so it moves with `main` and
-carries no upgrade guarantees.
+You add the remote once. After that `flatpak update` picks up every new build,
+and so does GNOME Software — the same as any other Flatpak you have installed.
+Builds move with `main` and carry no upgrade guarantees.
 
-`--or-update` is what makes the second one work. Every bundle is the same ref
-at the same version — `master`, 0.1.0 — because nothing bumps a version between
-CI runs, so plain `install` sees something already installed and stops. Nor can
-`flatpak update` help: a bundle is a file, not a remote, so there is nothing for
-it to pull from. The flag says "replace whatever is there", which for a rolling
-build is what was meant all along. Once there is a Flathub listing this becomes:
+Each build is signed, and the key travels inside the repository file above, so
+adding the remote is also what establishes what to trust.
+
+There is a single-file bundle on [the `continuous`
+release](https://github.com/develonrails/carbonate/releases/tag/continuous) for
+installing without a remote. Prefer the repository: a bundle cannot be updated
+in place. Every one is the same ref at the same version, so a second `install`
+stops at "already installed"; `flatpak update` has no remote to pull from; and
+GNOME Software refuses it outright while trying to invent an origin for the
+debug extension.
+
+Once there is a Flathub listing this becomes:
 
 ```sh
 flatpak install flathub io.github.develonrails.Carbonate   # not yet available
@@ -182,7 +191,8 @@ Done:
 
 Not done, and worth knowing before relying on carbonate:
 
-- No tagged release, no Flathub listing, no upgrade path between builds.
+- No tagged release and no Flathub listing. Updates work, but they track
+  `main` rather than a version anyone has decided is ready.
 - Cold start on a large account is slow: the first fetch decrypts everything.
 - One Proton account per session file.
 
