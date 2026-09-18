@@ -573,11 +573,16 @@ func storedAttendees(existing *rawEvent, keys *proton.CalendarKeys) ([]string, e
 	var out []string
 
 	for _, part := range existing.AttendeesEvents {
-		if err := part.Decode(keys.CalKR, keys.AddrKR, keyPacket); err != nil {
+		// Whether we can name the signer is not the question here — whether
+		// the guest list can be read is. An event another member of a shared
+		// calendar wrote is signed with their key, and refusing it would mean
+		// silently dropping the guests we are about to rewrite.
+		data, _, err := decodePart(part, keys.CalKR, keys.AddrKR, keyPacket)
+		if err != nil {
 			return nil, fmt.Errorf("decrypting the stored attendees: %w", err)
 		}
 
-		stored, err := parseEvent(part.Data)
+		stored, err := parseEvent(data)
 		if err != nil {
 			return nil, fmt.Errorf("parsing the stored attendees: %w", err)
 		}

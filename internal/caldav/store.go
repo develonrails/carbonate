@@ -2,6 +2,9 @@ package caldav
 
 import (
 	"context"
+	"fmt"
+	"io"
+	"sync"
 
 	"github.com/develonrails/carbonate/internal/calendar"
 	"github.com/develonrails/carbonate/internal/proton"
@@ -47,26 +50,65 @@ type Store interface {
 // protonStore is the Store backed by a live Proton connection.
 type protonStore struct {
 	conn *proton.Conn
+
+	// out is where an event that cannot be read is reported, and reported is
+	// how it stays: a calendar that is quietly one event short is worse than
+	// one that says which and why.
+	out io.Writer
+
+	// said remembers which ids have been reported, because the listing runs
+	// on every poll and the same unreadable event would otherwise fill the
+	// log.
+	mu   sync.Mutex
+	said map[string]bool
 }
 
-// NewStore returns a Store reading and writing a Proton account.
-func NewStore(conn *proton.Conn) Store {
-	return protonStore{conn: conn}
+// NewStore returns a Store reading and writing a Proton account. Events that
+// cannot be decrypted are reported to out; a nil writer says nothing.
+func NewStore(conn *proton.Conn, out io.Writer) Store {
+	return &protonStore{conn: conn, out: out, said: make(map[string]bool)}
 }
 
-func (s protonStore) Calendars(ctx context.Context) ([]calendar.Calendar, error) {
+func (s *protonStore) Calendars(ctx context.Context) ([]calendar.Calendar, error) {
 	return calendar.List(ctx, s.conn)
 }
 
-func (s protonStore) Events(ctx context.Context, calendarID string) ([]calendar.Event, error) {
-	return calendar.Events(ctx, s.conn, calendarID)
+func (s *protonStore) Events(ctx context.Context, calendarID string) ([]calendar.Event, error) {
+	events, unreadable, err := calendar.Events(ctx, s.conn, calendarID)
+	if err != nil {
+		return nil, err
+	}
+
+	s.report(calendarID, unreadable)
+
+	return events, nil
 }
 
-func (s protonStore) Put(ctx context.Context, calendarID, ics string) (string, bool, error) {
+// report names each unreadable event once.
+func (s *protonStore) report(calendarID string, ids []string) {
+	if s.out == nil || len(ids) == 0 {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, id := range ids {
+		if s.said[id] {
+			continue
+		}
+
+		s.said[id] = true
+
+		fmt.Fprintf(s.out, "carbonate: calendar %s: event %s cannot be decrypted, so it is not being served\n", short(calendarID), short(id))
+	}
+}
+
+func (s *protonStore) Put(ctx context.Context, calendarID, ics string) (string, bool, error) {
 	return calendar.Put(ctx, s.conn, calendarID, ics)
 }
 
-func (s protonStore) Delete(ctx context.Context, calendarID, uid string) (bool, error) {
+func (s *protonStore) Delete(ctx context.Context, calendarID, uid string) (bool, error) {
 	return calendar.Delete(ctx, s.conn, calendarID, uid)
 }
 
@@ -75,7 +117,7 @@ func (s protonStore) Delete(ctx context.Context, calendarID, uid string) (bool, 
 // One cheap request for a token that moves whenever the calendar does. A token
 // derived from the events themselves would mean listing them, which is the
 // work it exists to avoid.
-func (s protonStore) ChangeToken(ctx context.Context, calendarID string) (string, error) {
+func (s *protonStore) ChangeToken(ctx context.Context, calendarID string) (string, error) {
 	var res struct {
 		CalendarModelEventID string
 	}
@@ -94,7 +136,7 @@ func (s protonStore) ChangeToken(ctx context.Context, calendarID string) (string
 // The event loop's "latest" ID and the cursor a delta hands back are not the
 // same value, and handing out the former as a sync token makes the next delta
 // repeat the change that produced it.
-func (s protonStore) Cursor(ctx context.Context, calendarID string) (string, error) {
+func (s *protonStore) Cursor(ctx context.Context, calendarID string) (string, error) {
 	latest, err := s.ChangeToken(ctx, calendarID)
 	if err != nil {
 		return "", err
@@ -117,7 +159,7 @@ func (s protonStore) Cursor(ctx context.Context, calendarID string) (string, err
 // each ID up in the current state instead: an event that is still there
 // changed, one that is gone was removed. That needs no assumption about what
 // the action codes mean, and cannot disagree with what a read would show.
-func (s protonStore) Changes(ctx context.Context, calendarID, since string) ([]string, string, bool, error) {
+func (s *protonStore) Changes(ctx context.Context, calendarID, since string) ([]string, string, bool, error) {
 	if since == "" {
 		return nil, "", true, nil
 	}

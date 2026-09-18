@@ -53,7 +53,7 @@ func TestTokenIsURLSafe(t *testing.T) {
 }
 
 func newBackend() *Backend {
-	return New(newFake())
+	return New(newFake(), nil)
 }
 
 // A client may name a resource whatever it likes; the UID lives in the body.

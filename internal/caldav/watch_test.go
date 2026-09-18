@@ -56,7 +56,7 @@ func TestBackoffNeverOutpacesTheChosenInterval(t *testing.T) {
 // failure, and must not leak into the healthy path.
 func TestWatchKeepsPaceWhileHealthy(t *testing.T) {
 	fake := newFake()
-	b := New(fake)
+	b := New(fake, nil)
 
 	every := 20 * time.Millisecond
 
@@ -75,7 +75,7 @@ func TestWatchKeepsPaceWhileHealthy(t *testing.T) {
 
 func TestCheckReportsAFailure(t *testing.T) {
 	fake := newFake()
-	b := New(fake)
+	b := New(fake, nil)
 
 	if !b.check(context.Background()) {
 		t.Error("a healthy store was reported as failing")
@@ -91,7 +91,7 @@ func TestCheckReportsAFailure(t *testing.T) {
 // Zero means the clients decide, so nothing should be running at all.
 func TestWatchDoesNothingWhenDisabled(t *testing.T) {
 	fake := newFake()
-	b := New(fake)
+	b := New(fake, nil)
 
 	done := make(chan struct{})
 
@@ -119,7 +119,7 @@ func TestWatchSaysWhenItWillTryAgain(t *testing.T) {
 
 	var log bytes.Buffer
 
-	b := New(fake)
+	b := New(fake, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()

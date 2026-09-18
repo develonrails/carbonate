@@ -130,11 +130,35 @@ That split is what makes the common reports separable:
 no push: the client polls, and most default to a long interval. That is the
 most common report by far, and [SETUP.md](SETUP.md) explains how to shorten it.
 
-A contact carbonate cannot decrypt is named in the log and then left out of the
-address book, rather than failing the listing — one unreadable card must not
-hide every readable one. An event carbonate cannot decrypt still fails the
-whole collection, which shows up as every listing returning 500; the log names
-it.
+A contact or an event carbonate cannot serve is named in the log and then left
+out, rather than failing the listing:
+
+```
+carbonate: calendar 7WcS1DSk…: event G4Vr95GC… cannot be decrypted, so it is not being served
+carbonate: calendar 7WcS1DSk…: event party@example.com cannot be served: ical: malformed content line
+```
+
+One unreadable item must not hide every readable one. That distinction is the
+whole of issue #18: an error fails the collection, and Evolution shows a failed
+collection as an empty calendar — indistinguishable from Proton having sent
+nothing at all. A calendar is now one event short instead.
+
+It is still worth chasing the line rather than living with it, since the event
+is in the Proton web app and not in your client.
+
+### Events signed by someone else
+
+```
+carbonate: calendar 7WcS1DSk…: read 14 events from Proton (3 signed by a key we do not hold)
+```
+
+This one is normal and needs nothing done about it. A signature says who wrote
+an event, and carbonate holds only your own address keys — so an event another
+member of a shared calendar added, or one that arrived as an invitation, is
+signed with a key it cannot check. Those events decrypt fine and are served;
+the count is there so they are not silent.
+
+`carbonate calendars -events` marks each one `(signature not verified)`.
 
 ### Asking carbonate directly
 

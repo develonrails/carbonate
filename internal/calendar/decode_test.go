@@ -132,14 +132,20 @@ func TestDecodeReassemblesTheParts(t *testing.T) {
 	}
 }
 
-// A part signed by someone other than the calendar member must not be
-// accepted: that signature is the only thing proving the event was not
-// tampered with in transit.
-func TestDecodeRejectsABadSignature(t *testing.T) {
+// A part signed by someone other than the calendar member is served, and
+// flagged.
+//
+// carbonate holds one address's keys — ours — so a signature made by anyone
+// else cannot be checked here at all. On a shared calendar that is every event
+// another member added, and refusing those would hide events the web app
+// shows. Worse, refusal used to fail the whole read, so one such event emptied
+// the entire calendar in the client. The event is served, and says it could
+// not be attributed.
+func TestDecodeFlagsASignatureItCannotVerify(t *testing.T) {
 	calKR, addrKR := keys(t)
 	_, otherKR := keys(t)
 
-	body := "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:abc\r\nEND:VEVENT\r\nEND:VCALENDAR"
+	body := "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:abc\r\nSUMMARY:Theirs\r\nEND:VEVENT\r\nEND:VCALENDAR"
 
 	raw := rawEvent{CalendarEvent: api.CalendarEvent{
 		ID:           "event-id",
@@ -147,8 +153,39 @@ func TestDecodeRejectsABadSignature(t *testing.T) {
 		SharedEvents: []api.CalendarEventPart{signedPart(t, otherKR, body)},
 	}}
 
-	if _, err := decode(raw, calKR, addrKR); err == nil {
-		t.Error("an event signed by the wrong key was accepted")
+	event, err := decode(raw, calKR, addrKR)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if !event.Unverified {
+		t.Error("an event signed by a key we do not hold was not flagged as unverified")
+	}
+
+	if event.Summary() != "Theirs" {
+		t.Errorf("Summary() = %q, want the event to be served anyway", event.Summary())
+	}
+}
+
+// Our own signature still verifies, or the flag above would mean nothing.
+func TestDecodeAcceptsOurOwnSignature(t *testing.T) {
+	calKR, addrKR := keys(t)
+
+	body := "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:abc\r\nSUMMARY:Ours\r\nEND:VEVENT\r\nEND:VCALENDAR"
+
+	raw := rawEvent{CalendarEvent: api.CalendarEvent{
+		ID:           "event-id",
+		UID:          "abc",
+		SharedEvents: []api.CalendarEventPart{signedPart(t, addrKR, body)},
+	}}
+
+	event, err := decode(raw, calKR, addrKR)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if event.Unverified {
+		t.Error("an event signed with our own address key was flagged as unverified")
 	}
 }
 
@@ -215,5 +252,59 @@ func TestDecodeCountsAttendees(t *testing.T) {
 
 	if event.Attendees != 2 {
 		t.Errorf("Attendees = %d, want 2", event.Attendees)
+	}
+}
+
+// One event that cannot be decrypted must cost that one event, and nothing
+// else.
+//
+// This is the whole of issue #18 in one test. Reading a calendar used to stop
+// at the first event it could not decode, so every CalDAV listing of that
+// collection answered 500, and GNOME Calendar — which shows an empty calendar
+// rather than an error — looked exactly as though Proton had sent nothing.
+// The calendars with no such event downsynced fine, which is what made it look
+// like a sync bug rather than one bad event.
+func TestDecodeAllSkipsOnlyTheUnreadableEvent(t *testing.T) {
+	calKR, addrKR := keys(t)
+	otherCalKR, _ := keys(t)
+
+	body := func(uid string) string {
+		return "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:" + uid + "\r\nSUMMARY:" + uid + "\r\nEND:VEVENT\r\nEND:VCALENDAR"
+	}
+
+	// Encrypted to a calendar key we do not have: unreadable, for real.
+	sealed, otherKeyPacket := encryptPart(t, otherCalKR, addrKR, body("locked"))
+
+	raw := []rawEvent{
+		{CalendarEvent: api.CalendarEvent{
+			ID:           "first",
+			UID:          "first",
+			SharedEvents: []api.CalendarEventPart{signedPart(t, addrKR, body("first"))},
+		}},
+		{CalendarEvent: api.CalendarEvent{
+			ID:              "locked",
+			UID:             "locked",
+			SharedKeyPacket: otherKeyPacket,
+			SharedEvents:    []api.CalendarEventPart{sealed},
+		}},
+		{CalendarEvent: api.CalendarEvent{
+			ID:           "last",
+			UID:          "last",
+			SharedEvents: []api.CalendarEventPart{signedPart(t, addrKR, body("last"))},
+		}},
+	}
+
+	events, unreadable := decodeAll(raw, calKR, addrKR)
+
+	if len(events) != 2 {
+		t.Fatalf("decoded %d events, want the 2 that could be read", len(events))
+	}
+
+	if events[0].UID != "first" || events[1].UID != "last" {
+		t.Errorf("decoded %q and %q, want first and last", events[0].UID, events[1].UID)
+	}
+
+	if len(unreadable) != 1 || unreadable[0] != "locked" {
+		t.Errorf("unreadable = %v, want [locked]", unreadable)
 	}
 }

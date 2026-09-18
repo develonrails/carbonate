@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"path"
@@ -58,19 +59,29 @@ type Backend struct {
 	// a deletion — which Proton reports by ID alone — can still be named to a
 	// client that knows the event by its path.
 	uids map[string]map[string]string
+
+	// out is where an event that cannot be served is reported, and said
+	// remembers which have been, since a listing runs on every poll.
+	out  io.Writer
+	said map[string]bool
 }
 
 // New returns a backend reading and writing through store.
 //
 // Cached events are kept until Proton says the calendar has changed, so a
 // change made elsewhere shows up on the next poll rather than after a timer.
-func New(store Store) *Backend {
+//
+// An event that cannot be served is reported to out; a nil writer says
+// nothing.
+func New(store Store, out io.Writer) *Backend {
 	return &Backend{
 		store:  store,
 		cache:  cache.New[calendar.Event](),
 		tokens: make(map[string]string),
 		names:  make(map[string]string),
 		uids:   make(map[string]map[string]string),
+		out:    out,
+		said:   make(map[string]bool),
 	}
 }
 
@@ -363,13 +374,43 @@ func (b *Backend) ListCalendarObjects(ctx context.Context, p string, req *caldav
 	for _, uid := range order {
 		obj, err := group(segment, groups[uid])
 		if err != nil {
-			return nil, err
+			// The same trade the decrypting makes one layer down: a listing
+			// that fails is a calendar the client shows as empty, so one
+			// event carbonate cannot render must not take the other hundred
+			// with it.
+			b.cannotServe(id, uid, err)
+
+			continue
 		}
 
 		out = append(out, obj)
 	}
 
 	return out, nil
+}
+
+// cannotServe names an event left out of a listing, once each.
+//
+// Skipping silently would leave a calendar quietly one event short, which is
+// the kind of fault nobody reports until long after it started — and the event
+// is still in the Proton web app to be compared against.
+func (b *Backend) cannotServe(calendarID, uid string, err error) {
+	if b.out == nil {
+		return
+	}
+
+	key := calendarID + "\x00" + uid
+
+	b.mu.Lock()
+	said := b.said[key]
+	b.said[key] = true
+	b.mu.Unlock()
+
+	if said {
+		return
+	}
+
+	fmt.Fprintf(b.out, "carbonate: calendar %s: event %s cannot be served: %v\n", token(calendarID)[:8], uid, err)
 }
 
 func (b *Backend) GetCalendarObject(ctx context.Context, p string, req *caldav.CalendarCompRequest) (*caldav.CalendarObject, error) {
@@ -417,7 +458,39 @@ func (b *Backend) QueryCalendarObjects(ctx context.Context, p string, query *cal
 		return nil, err
 	}
 
-	return caldav.Filter(query, objects)
+	if query == nil {
+		return objects, nil
+	}
+
+	id, err := b.calendarID(ctx, p)
+	if err != nil {
+		return nil, err
+	}
+
+	// Matched one at a time rather than through caldav.Filter, which returns
+	// the first error and discards every object it had already matched.
+	//
+	// Deciding whether an event falls in a time range means parsing its dates
+	// and expanding its recurrence rule, and either can fail on a single
+	// malformed event. This is the report a client uses to find out what is
+	// there, so one such event failing it is a calendar that downsyncs
+	// nothing — the same ending as the other two, reached a third way.
+	out := make([]caldav.CalendarObject, 0, len(objects))
+
+	for i := range objects {
+		matched, err := caldav.Match(query.CompFilter, &objects[i])
+		if err != nil {
+			b.cannotServe(id, objects[i].Path, err)
+
+			continue
+		}
+
+		if matched {
+			out = append(out, objects[i])
+		}
+	}
+
+	return out, nil
 }
 
 func (b *Backend) PutCalendarObject(ctx context.Context, p string, cal *ical.Calendar, opts *caldav.PutCalendarObjectOptions) (*caldav.CalendarObject, error) {

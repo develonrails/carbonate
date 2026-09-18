@@ -44,6 +44,11 @@ type Event struct {
 	// RecurrenceID identifies which occurrence of a series this event
 	// replaces. Zero for an ordinary event or for the series itself.
 	RecurrenceID int64
+
+	// Unverified means a signature on the event was made by a key carbonate
+	// does not hold, so who wrote it cannot be proved. The contents still
+	// decrypted, and are served.
+	Unverified bool
 }
 
 // rawEvent is an event as Proton actually sends it.
@@ -208,30 +213,55 @@ func (e Event) When() string {
 	return e.Start.Local().Format("2006-01-02 15:04")
 }
 
-// Events fetches and decrypts every event in a calendar.
-func Events(ctx context.Context, conn *proton.Conn, calendarID string) ([]Event, error) {
+// Events returns every event in a calendar that can be decrypted, and the ids
+// of those that cannot.
+//
+// An event that cannot be decrypted is skipped rather than failing the
+// listing. The two are not close: a CalDAV client that gets an error shows an
+// empty calendar, so one unreadable event would hide every readable one behind
+// it — the whole calendar gone for the sake of the one event actually at
+// fault. Skipping costs that one event and keeps the rest reachable.
+//
+// The skipped ids come back rather than disappearing, because an event that
+// silently goes missing is the kind of fault nobody reports until long after
+// it started.
+func Events(ctx context.Context, conn *proton.Conn, calendarID string) ([]Event, []string, error) {
 	keys, err := conn.CalendarKeys(ctx, calendarID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	raw, err := fetchAll(ctx, conn, calendarID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
+	events, unreadable := decodeAll(raw, keys.CalKR, keys.AddrKR)
+
+	return events, unreadable, nil
+}
+
+// decodeAll decodes what it can and names what it cannot.
+//
+// Separate from Events so the trade it makes can be tested without an
+// account: that one unreadable event costs one event, and nothing else.
+func decodeAll(raw []rawEvent, calKR, addrKR *crypto.KeyRing) ([]Event, []string) {
 	events := make([]Event, 0, len(raw))
 
+	var unreadable []string
+
 	for _, r := range raw {
-		event, err := decode(r, keys.CalKR, keys.AddrKR)
+		event, err := decode(r, calKR, addrKR)
 		if err != nil {
-			return nil, fmt.Errorf("decoding event %s: %w", r.ID, err)
+			unreadable = append(unreadable, r.ID)
+
+			continue
 		}
 
 		events = append(events, event)
 	}
 
-	return events, nil
+	return events, unreadable
 }
 
 // pageSize is deliberately below go-proton-api's own maxPageSize of 150, which
@@ -358,15 +388,59 @@ func decode(raw rawEvent, calKR, addrKR *crypto.KeyRing) (Event, error) {
 		}
 
 		for _, part := range group.parts {
-			if err := part.Decode(calKR, addrKR, keyPacket); err != nil {
+			data, ok, err := decodePart(part, calKR, addrKR, keyPacket)
+			if err != nil {
 				return Event{}, err
 			}
 
-			event.Properties = append(event.Properties, properties(part.Data)...)
+			if !ok {
+				event.Unverified = true
+			}
+
+			event.Properties = append(event.Properties, properties(data)...)
 		}
 	}
 
 	return event, nil
+}
+
+// decodePart decrypts a part and judges its signature separately, returning
+// the plaintext and whether the signature was made by a key we hold.
+//
+// go-proton-api answers both in one call that fails on either, and they are
+// not the same question. Decryption is whether the contents can be read;
+// a signature is who wrote them. addrKR holds one address's keys — ours — so
+// anything written by anyone else cannot be verified here, and on a shared
+// calendar that is most of it: every event another member added is signed with
+// their address key, which is not ours to have.
+//
+// Treating the second as fatal meant refusing to serve events that had
+// decrypted perfectly well, and that the Proton web app shows. Worse, one such
+// event failed the whole read, so it took every other event in the calendar
+// with it. Clearing the signed bit leaves Decode decrypting only, and the
+// signature is judged here.
+func decodePart(part api.CalendarEventPart, calKR, addrKR *crypto.KeyRing, keyPacket []byte) (string, bool, error) {
+	signature := part.Signature
+	signed := part.Type&api.CalendarEventTypeSigned != 0
+
+	part.Type &^= api.CalendarEventTypeSigned
+
+	if err := part.Decode(calKR, addrKR, keyPacket); err != nil {
+		return "", false, err
+	}
+
+	if !signed {
+		return part.Data, true, nil
+	}
+
+	sig, err := crypto.NewPGPSignatureFromArmored(signature)
+	if err != nil {
+		return part.Data, false, nil
+	}
+
+	verified := addrKR.VerifyDetached(crypto.NewPlainMessageFromString(part.Data), sig, crypto.GetUnixTime()) == nil
+
+	return part.Data, verified, nil
 }
 
 // properties splits a decrypted part into iCalendar lines, unfolding the

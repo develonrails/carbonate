@@ -233,14 +233,38 @@ func TestDroppedGuestIsNamed(t *testing.T) {
 func TestUnreadableStoredGuestListStillWritesTheEvent(t *testing.T) {
 	ck := calendarKeys(t)
 
-	// Signed by an address key that is not ours, so verification fails.
-	_, stranger := keys(t)
-	existing := storedGuests(t, ck.CalKR, stranger, "gone@example.com")
+	existing := storedGuests(t, ck.CalKR, ck.AddrKR, "gone@example.com")
+
+	// Corrupt the attendee part itself, leaving the shared key packet intact:
+	// the event still re-keys, and only the guest list is beyond reach.
+	existing.AttendeesEvents[0].Data = base64.StdEncoding.EncodeToString([]byte("not a pgp message"))
 
 	data := build(t, invitation, ck, existing, found(nil))
 
 	if len(data.RemovedAttendeeAddresses) != 0 {
 		t.Errorf("named %v as removed from a guest list it could not read, want none", data.RemovedAttendeeAddresses)
+	}
+}
+
+// A guest list signed by someone else is still a guest list.
+//
+// On a shared calendar the event may have been written by another member, and
+// their signature is one carbonate cannot check. That says nothing about
+// whether the list can be read — it decrypts under the calendar key like any
+// other — and treating it as unreadable would quietly leave a removed guest
+// waiting for an invitation that had already been withdrawn.
+func TestGuestListSignedByAnotherMemberIsStillRead(t *testing.T) {
+	ck := calendarKeys(t)
+
+	_, stranger := keys(t)
+	existing := storedGuests(t, ck.CalKR, stranger, "gone@example.com")
+
+	data := build(t, invitation, ck, existing, found(nil))
+
+	want := []string{"gone@example.com"}
+
+	if len(data.RemovedAttendeeAddresses) != len(want) || data.RemovedAttendeeAddresses[0] != want[0] {
+		t.Errorf("named %v as removed, want %v", data.RemovedAttendeeAddresses, want)
 	}
 }
 

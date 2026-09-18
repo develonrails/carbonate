@@ -80,9 +80,31 @@ func (s *loggingStore) Events(ctx context.Context, calendarID string) ([]calenda
 		return nil, err
 	}
 
+	// An unverified event is served, so it is not a failure — but it is the
+	// thing to point at when someone asks why carbonate trusts an event it
+	// cannot attribute, so the count goes out with the read.
+	if n := unverified(events); n > 0 {
+		s.printf("calendar %s: read %d events from Proton (%d signed by a key we do not hold)", short(calendarID), len(events), n)
+
+		return events, nil
+	}
+
 	s.printf("calendar %s: read %d events from Proton", short(calendarID), len(events))
 
 	return events, nil
+}
+
+// unverified counts the events whose signatures could not be checked.
+func unverified(events []calendar.Event) int {
+	n := 0
+
+	for _, e := range events {
+		if e.Unverified {
+			n++
+		}
+	}
+
+	return n
 }
 
 func (s *loggingStore) Put(ctx context.Context, calendarID, ics string) (string, bool, error) {

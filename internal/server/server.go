@@ -58,7 +58,7 @@ func Serve(ctx context.Context, conn *proton.Conn, opts Options) error {
 	// Every line the bridge logs goes through here, so every line is stamped.
 	activity := Stamped(opts.Activity)
 
-	calendars := caldav.New(caldav.Logging(caldav.NewStore(conn), activity))
+	calendars := caldav.New(caldav.Logging(caldav.NewStore(conn, activity), activity), activity)
 	addressBook := carddav.New(carddav.NewStore(conn, activity))
 
 	go calendars.Watch(ctx, opts.Watch, activity)

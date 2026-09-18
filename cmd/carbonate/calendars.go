@@ -61,9 +61,15 @@ func cmdCalendars(ctx context.Context, args []string, out io.Writer) error {
 			continue
 		}
 
-		decoded, err := calendar.Events(ctx, conn, cal.ID)
+		decoded, unreadable, err := calendar.Events(ctx, conn, cal.ID)
 		if err != nil {
 			return err
+		}
+
+		// Saying nothing here would make a missing event look like one that
+		// was never there.
+		if len(unreadable) > 0 {
+			fmt.Fprintf(out, "  %d event(s) could not be decrypted and are not listed.\n", len(unreadable))
 		}
 
 		for _, e := range decoded {
@@ -72,7 +78,12 @@ func cmdCalendars(ctx context.Context, args []string, out io.Writer) error {
 				summary = "(no summary)"
 			}
 
-			fmt.Fprintf(out, "  %s  %s\n", e.When(), summary)
+			unverified := ""
+			if e.Unverified {
+				unverified = "  (signature not verified)"
+			}
+
+			fmt.Fprintf(out, "  %s  %s%s\n", e.When(), summary, unverified)
 
 			if e.Attendees > 0 {
 				fmt.Fprintf(out, "    %d attendee(s)\n", e.Attendees)
