@@ -102,6 +102,14 @@ func (b *Backend) Handler() http.Handler {
 // one cheap request — which is the point: a ctag computed from the events
 // themselves would mean listing them, the very work it exists to avoid.
 func (b *Backend) ctag(ctx context.Context, p string) (string, error) {
+	// Only a calendar collection has one. The same reply may describe the
+	// events inside it, and each of those resolves to a calendar ID just as
+	// happily — so without this, every event would be handed the collection's
+	// change token and a client would read each as a collection of its own.
+	if !isCalendarPath(p) {
+		return "", webdav.NewHTTPError(http.StatusNotFound, fmt.Errorf("not a calendar collection: %s", p))
+	}
+
 	id, err := b.calendarID(ctx, p)
 	if err != nil {
 		return "", err
@@ -233,6 +241,17 @@ func calendarSegment(p string) string {
 	}
 
 	return rest
+}
+
+// isCalendarPath reports whether a path names a calendar collection itself,
+// rather than the home set above it or an event inside it.
+func isCalendarPath(p string) bool {
+	segment := calendarSegment(p)
+	if segment == "" {
+		return false
+	}
+
+	return path.Clean(p) == path.Clean(homeSetPath+segment)
 }
 
 // objectUID returns the UID of the event stored at an object path.

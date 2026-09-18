@@ -189,3 +189,62 @@ func wrapped(inner http.Handler, ctag davcompat.CTagFunc) http.Handler {
 		CTag:             ctag,
 	})
 }
+
+// A Depth: 1 PROPFIND of the home set asks for every calendar's ctag at once,
+// and answering only for the collection the request was addressed to leaves
+// each calendar in the reply without one.
+//
+// A client that refreshes that way is told nothing changed, forever. The
+// calendar then looks stuck until something forces a fresh discovery — such as
+// the bridge restarting, which is exactly how it was reported in #18.
+func TestCTagIsAnsweredForEveryCalendarInTheReply(t *testing.T) {
+	b := New(newFake(), nil)
+
+	calendars, err := b.ListCalendars(context.Background())
+	if err != nil {
+		t.Fatalf("ListCalendars: %v", err)
+	}
+
+	req := httptest.NewRequest("PROPFIND", homeSetPath, strings.NewReader(ctagRequest))
+	req.Header.Set("Depth", "1")
+	req.Header.Set("Content-Type", "application/xml")
+
+	rec := httptest.NewRecorder()
+	b.Handler().ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+
+	// The calendar is a child of the requested collection, not the collection
+	// itself, and it is the one that needs the answer.
+	if !strings.Contains(body, calendars[0].Path) {
+		t.Fatalf("the calendar is missing from the reply:\n%s", body)
+	}
+
+	if strings.Count(body, "getctag") == 0 {
+		t.Errorf("no ctag was answered for a calendar listed at Depth 1:\n%s", body)
+	}
+}
+
+// The events inside a calendar resolve to a calendar ID just as happily as the
+// calendar does, so without a guard each would be handed the collection's
+// change token and a client would read every event as a collection.
+func TestEventsAreNotGivenACTag(t *testing.T) {
+	b := New(newFake(), nil)
+
+	calendars, err := b.ListCalendars(context.Background())
+	if err != nil {
+		t.Fatalf("ListCalendars: %v", err)
+	}
+
+	req := httptest.NewRequest("PROPFIND", calendars[0].Path, strings.NewReader(ctagRequest))
+	req.Header.Set("Depth", "1")
+	req.Header.Set("Content-Type", "application/xml")
+
+	rec := httptest.NewRecorder()
+	b.Handler().ServeHTTP(rec, req)
+
+	// One for the calendar, and none for the events inside it.
+	if got := strings.Count(rec.Body.String(), "<getctag"); got != 1 {
+		t.Errorf("got %d ctags, want exactly 1 (the calendar itself):\n%s", got, rec.Body.String())
+	}
+}
