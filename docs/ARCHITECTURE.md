@@ -170,10 +170,19 @@ everything".
 
 Three things are not obvious:
 
-- **The loop's `latest` ID is not a consumed cursor.** Handing it out as a
-  sync token makes the next delta repeat whatever change produced it, so a
-  client would refetch forever. A token is obtained by reading the loop *at*
-  `latest` and taking the cursor that comes back.
+- **The loop's `latest` ID is the sync token.** Not the cursor that comes back
+  from reading the loop *at* `latest`, which is what carbonate used to hand
+  out, on the reasoning that `latest` is not a consumed position and would make
+  the next delta repeat the change that produced it.
+
+  Measured against a live account, both halves of that are wrong. Two events
+  created after a full sync are both reported when the walk starts from
+  `latest`, and only the later one when it starts from the derived cursor: that
+  cursor sits past changes which had not happened when it was issued. Since the
+  client stores whatever token it is given, the skipped event never arrives at
+  all — a calendar that syncs once and then goes quiet. The repeat does not
+  happen either; asking the loop for changes since its own `latest`, with
+  nothing changed, answers with no events and leaves the cursor where it was.
 - **The action codes are ignored.** Proton says what happened to each event,
   but carbonate looks the ID up in the current state instead: still there
   means changed, gone means removed. That needs no assumption about what the

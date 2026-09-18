@@ -34,8 +34,8 @@ type Store interface {
 	// calendar does, and only then.
 	ChangeToken(ctx context.Context, calendarID string) (string, error)
 
-	// Cursor returns a position in the change log that has already been
-	// consumed, for a client starting from nothing.
+	// Cursor returns the position in the change log that a client starting
+	// from nothing should sync from.
 	Cursor(ctx context.Context, calendarID string) (string, error)
 
 	// Changes reports which events have moved since a token, and returns a
@@ -129,28 +129,28 @@ func (s *protonStore) ChangeToken(ctx context.Context, calendarID string) (strin
 	return res.CalendarModelEventID, nil
 }
 
-// Cursor returns a position in the calendar event loop that has already been
-// consumed, so that asking for changes since it reports only what happens
-// afterwards.
+// Cursor returns the position a client starting from nothing should sync from:
+// the event loop's latest ID, and nothing cleverer.
 //
-// The event loop's "latest" ID and the cursor a delta hands back are not the
-// same value, and handing out the former as a sync token makes the next delta
-// repeat the change that produced it.
+// This used to read the loop *at* that ID and hand back the cursor that came
+// with it, on the reasoning that the latest ID is not a consumed position and
+// would make the next delta repeat the change that produced it. Measured
+// against a live account, both halves of that are wrong, and the second one
+// loses data:
+//
+//	from the latest ID     two events created since → both reported
+//	from the derived one   the same two             → only the later one
+//
+// The derived cursor sits past changes that had not happened when it was
+// issued, so the first change after a full sync is skipped — and since the
+// client stores the token it is given, that event never arrives at all. It is
+// exactly the shape of a calendar that syncs once and then goes quiet.
+//
+// The repeat that was feared does not happen either: asking the loop for
+// changes since its own latest ID, with nothing changed, answers with no
+// events and leaves the cursor where it was.
 func (s *protonStore) Cursor(ctx context.Context, calendarID string) (string, error) {
-	latest, err := s.ChangeToken(ctx, calendarID)
-	if err != nil {
-		return "", err
-	}
-
-	var res struct {
-		CalendarModelEventID string
-	}
-
-	if err := s.conn.Get(ctx, "/calendar/v1/"+calendarID+"/modelevents/"+latest, &res); err != nil {
-		return "", err
-	}
-
-	return res.CalendarModelEventID, nil
+	return s.ChangeToken(ctx, calendarID)
 }
 
 // Changes walks Proton's calendar event loop from a cursor.

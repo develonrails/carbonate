@@ -125,8 +125,9 @@ func (b *Backend) sync(ctx context.Context, p, token string, wantData bool) (syn
 
 // fullSync reports every member, which RFC 6578 allows in place of a delta.
 func (b *Backend) fullSync(ctx context.Context, p, calendarID string, wantData bool) (syncResult, error) {
-	// A consumed cursor, not the loop's latest ID: handing out the latter
-	// makes the next delta repeat whatever change produced it.
+	// Where a client starting from nothing should sync from. See Cursor:
+	// deriving something cleverer than the loop's latest ID skips the first
+	// change that follows, and the client never learns of it.
 	token, err := b.store.Cursor(ctx, calendarID)
 	if err != nil {
 		return syncResult{}, err

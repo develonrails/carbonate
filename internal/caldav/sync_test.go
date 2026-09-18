@@ -271,3 +271,32 @@ func TestOtherReportsArePassedThrough(t *testing.T) {
 		t.Error("the report never reached the handler behind the middleware")
 	}
 }
+
+// The token handed to a client starting from nothing must not sit past changes
+// that have not happened yet.
+//
+// carbonate used to derive it by reading the event loop at its latest ID and
+// taking the cursor that came back. Against a live account that cursor skipped
+// the first change made after the full sync, and because a client stores the
+// token it is given, that change never arrived — the calendar synced once and
+// went quiet, which is what #18 reported after the decryption fix.
+func TestFullSyncHandsOutTheChangeToken(t *testing.T) {
+	fake := newFake()
+	fake.token = "loop-latest"
+
+	b := backendWith(fake)
+	path := calendarPath(t, b)
+
+	result, err := b.sync(context.Background(), path, "", false)
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+
+	if !result.Resync {
+		t.Error("a sync from nothing did not tell the client to read everything")
+	}
+
+	if result.Token != fake.token {
+		t.Errorf("handed out %q, want the loop's latest ID %q", result.Token, fake.token)
+	}
+}
