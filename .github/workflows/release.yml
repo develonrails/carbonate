@@ -93,6 +93,27 @@ jobs:
             ostree init --repo=published/repo --mode=archive
           fi
 
+          # git does not store empty directories, and an OSTree repository
+          # keeps several. They are created by ostree init, survive the first
+          # publish in the runner's own filesystem, and are gone the moment
+          # the repository comes back through a clone of gh-pages — at which
+          # point build-update-repo stops with
+          #
+          #   error: Listing refs: opendir(refs/remotes): No such file or directory
+          #
+          # So every run after the first one failed, and the published
+          # repository stayed on the build that created it while CI went on
+          # reporting green.
+          # These are all of them, rather than only the two that happened to
+          # be reached first: what ostree init creates is the shape ostree
+          # expects to find, and a later operation may want one of the others.
+          mkdir -p published/repo/refs/heads \
+                   published/repo/refs/mirrors \
+                   published/repo/refs/remotes \
+                   published/repo/state \
+                   published/repo/extensions \
+                   published/repo/tmp/cache
+
       - name: Unlock the signing key
         env:
           SIGNING_KEY: ${{ secrets.FLATPAK_GPG_PRIVATE_KEY }}
