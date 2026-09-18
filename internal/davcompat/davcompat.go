@@ -113,10 +113,14 @@ func Wrap(next http.Handler, opts Options) http.Handler {
 		}
 
 		if wantCTag && opts.CTag != nil {
-			if value, err := opts.CTag(r.Context(), r.URL.Path); err == nil {
-				rec.body = *bytes.NewBuffer(injectProp(rec.body.Bytes(), r.URL.Path,
-					fmt.Sprintf(`<getctag xmlns="http://calendarserver.org/ns/">%s</getctag>`, html.EscapeString(value))))
-			}
+			rec.body = *bytes.NewBuffer(injectCTags(rec.body.Bytes(), func(href string) (string, bool) {
+				value, err := opts.CTag(r.Context(), href)
+				if err != nil || value == "" {
+					return "", false
+				}
+
+				return fmt.Sprintf(`<getctag xmlns="http://calendarserver.org/ns/">%s</getctag>`, html.EscapeString(value)), true
+			}))
 		}
 
 		rec.flush()
@@ -186,6 +190,47 @@ func injectProp(body []byte, collection, property string) []byte {
 
 		got := strings.TrimSuffix(path.Clean(html.UnescapeString(string(href[2]))), "/")
 		if got != want {
+			return response
+		}
+
+		if merged, ok := mergeIntoPropstat(response, property); ok {
+			return merged
+		}
+
+		// Nothing succeeded for this resource, so there is no prop list to
+		// join. Start one, ahead of whatever did not succeed.
+		propstat := `<propstat xmlns="DAV:"><prop xmlns="DAV:">` + property + `</prop><status>HTTP/1.1 200 OK</status></propstat>`
+
+		end := hrefPattern.FindIndex(response)
+		if end == nil {
+			return response
+		}
+
+		return concat(response[:end[1]], []byte(propstat), response[end[1]:])
+	})
+}
+
+// injectCTags answers getctag for every collection in a multistatus, not only
+// the one the request was addressed to.
+//
+// A Depth: 1 PROPFIND of the home set asks for the ctag of each calendar in
+// one go, and answering only for the home set leaves every calendar in the
+// reply without one. A client that refreshes that way is told nothing changed,
+// forever — and the calendar looks stuck until something forces a fresh
+// discovery, such as the bridge restarting.
+//
+// ctag decides which hrefs it has an answer for; anything it declines is left
+// alone, which is what keeps the events inside a calendar from each claiming
+// to be a collection with a change token of its own.
+func injectCTags(body []byte, ctag func(href string) (string, bool)) []byte {
+	return responsePattern.ReplaceAllFunc(body, func(response []byte) []byte {
+		match := hrefPattern.FindSubmatch(response)
+		if match == nil {
+			return response
+		}
+
+		property, ok := ctag(html.UnescapeString(string(match[2])))
+		if !ok {
 			return response
 		}
 

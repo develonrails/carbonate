@@ -82,8 +82,11 @@ func (b *Backend) Handler() http.Handler {
 // client still works, which makes the gap look like a one-way bridge rather
 // than a missing property.
 func (b *Backend) ctag(ctx context.Context, p string) (string, error) {
-	if p != bookPath {
-		return "", nil
+	// Only the address book itself has one. The same reply may describe the
+	// contacts inside it, and saying nothing for those has to be a refusal
+	// rather than an empty answer, or each would be handed a ctag of its own.
+	if path.Clean(p) != path.Clean(bookPath) {
+		return "", webdav.NewHTTPError(http.StatusNotFound, fmt.Errorf("not an address book: %s", p))
 	}
 
 	return b.store.ChangeToken(ctx)
