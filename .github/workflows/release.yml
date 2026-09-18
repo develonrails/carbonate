@@ -63,8 +63,12 @@ jobs:
           on $(date -u '+%Y-%m-%d %H:%M UTC').
 
           \`\`\`sh
-          flatpak install --user carbonate-x86_64.flatpak
+          flatpak install --user --or-update carbonate-x86_64.flatpak
           \`\`\`
+
+          \`--or-update\` is needed from the second install onwards: every bundle
+          is the same ref at the same version, so plain \`install\` stops at
+          "already installed", and \`flatpak update\` has no remote to pull from.
           NOTES
           )
 

@@ -78,11 +78,18 @@ from the current `main` — [the `continuous`
 release](https://github.com/develonrails/carbonate/releases/tag/continuous):
 
 ```sh
-flatpak install --user carbonate-x86_64.flatpak
+flatpak install --user --or-update carbonate-x86_64.flatpak
 ```
 
 That bundle is replaced by every green CI run, so it moves with `main` and
-carries no upgrade guarantees. Once there is a Flathub listing this becomes:
+carries no upgrade guarantees.
+
+`--or-update` is what makes the second one work. Every bundle is the same ref
+at the same version — `master`, 0.1.0 — because nothing bumps a version between
+CI runs, so plain `install` sees something already installed and stops. Nor can
+`flatpak update` help: a bundle is a file, not a remote, so there is nothing for
+it to pull from. The flag says "replace whatever is there", which for a rolling
+build is what was meant all along. Once there is a Flathub listing this becomes:
 
 ```sh
 flatpak install flathub io.github.develonrails.Carbonate   # not yet available
