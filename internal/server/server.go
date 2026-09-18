@@ -93,7 +93,7 @@ Serving on http://%[1]s — sign in as %[2]s with your bridge password.
 On GNOME, Settings -> Online Accounts -> Calendar, Contacts and Files sets up
 both at once; type the http:// yourself and leave Files empty. Per app:
 GNOME Calendar takes Calendars -> Add calendar -> Add from web. GNOME Contacts
-has no dialog of its own — see docs/CLIENTS.md.
+has no dialog of its own — see docs/SETUP.md.
 `, listener.Addr(), username)
 
 	announce(activity, listener.Addr().String(), opts.Watch)

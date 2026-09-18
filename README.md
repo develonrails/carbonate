@@ -12,10 +12,18 @@ can talk to Proton.
 > something to experiment with, keep a way back to the web app, and expect to
 > re-read this file after pulling.
 
-> **Status: calendars and contacts both work.** `carbonate serve` exposes
-> Proton Calendar over CalDAV and Proton Contacts over CardDAV, reads and
-> writes verified against live Proton, attendees included. See
-> [Roadmap](#roadmap) for what is still missing.
+> **Status: calendars and contacts both work**, in both directions, verified
+> against a live Proton account — attendees, reminders, recurring events and
+> invitations included. See [Status](#status) for what is still missing.
+
+## Documentation
+
+| | |
+|---|---|
+| [docs/SETUP.md](docs/SETUP.md) | Connecting a client — GNOME Online Accounts, GNOME Calendar, GNOME Contacts, everything else |
+| [docs/OPERATING.md](docs/OPERATING.md) | Running it day to day — the bridge password, sessions, logs, what to do when nothing syncs |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How it works inside, and what Proton's private API actually does |
+| [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) | Building, testing, packaging |
 
 ## Why
 
@@ -50,18 +58,15 @@ CalDAV/CardDAV client  →  go-webdav backend  →  local cache (decrypted)
 Proton's data model happens to be the DAV formats already:
 
 - **Contacts** are vCards, split into cards by protection level (cleartext,
-  signed, encrypted+signed) under your address key.
+  signed, encrypted+signed).
 - **Events** are iCalendar, split across `SharedEvents`, `CalendarEvents`,
   `AttendeesEvents` and `PersonalEvents`, each with signed and encrypted
   sections under a per-calendar key.
 
 Reading means reassembling those parts; writing means splitting them back apart
-correctly. carbonate now does both. go-proton-api offers no calendar write
-endpoints, so carbonate calls Proton's sync endpoint itself — the property-split
-table comes from protoxide, and the ways Proton rejects a bad write are
-documented in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
-
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detail.
+correctly. go-proton-api offers no calendar write endpoints, so carbonate calls
+Proton's sync endpoint itself. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) has
+the detail, including the ways Proton rejects a bad write.
 
 ## Install
 
@@ -83,6 +88,10 @@ carries no upgrade guarantees. Once there is a Flathub listing this becomes:
 flatpak install flathub io.github.develonrails.Carbonate   # not yet available
 ```
 
+To build it yourself, see [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md).
+
+## First run
+
 Open Carbonate, sign in to Proton once, and press Start. The window shows the
 address and the bridge password to give your calendar app. Turning on **Start
 at login** asks your system for permission to run in the background, so the
@@ -93,40 +102,28 @@ Signing in is the one step that cannot be automated: Proton asks for your
 password, possibly a second factor, and occasionally a human-verification
 challenge. Everything after it runs unattended.
 
-### From source
-
-Requires Go 1.26 or newer.
+The same thing from a terminal:
 
 ```sh
-make build      # or: go build ./cmd/carbonate
+carbonate auth <username>   # log in to Proton, store an encrypted session
+carbonate serve             # serve CalDAV and CardDAV on 127.0.0.1:8080
 ```
 
-### Building the Flatpak yourself
+`auth` prints a randomly generated **bridge password** once. It encrypts the
+session file, and your DAV clients will use it as their password.
 
-```sh
-flatpak install flathub org.flatpak.Builder org.gnome.Sdk//50 \
-    org.freedesktop.Sdk.Extension.golang//25.08
-cd build/flatpak
-flatpak run org.flatpak.Builder --force-clean --user --install builddir \
-    io.github.develonrails.Carbonate.yml
-```
+Then point a client at:
 
-Flathub builds with no network, so every dependency is listed in
-`build/flatpak/go.mod.yml` as a module zip and unpacked into `vendor/`. After
-changing a dependency, regenerate it:
+| | |
+|---|---|
+| Calendar | `http://127.0.0.1:8080/caldav/` |
+| Contacts | `http://127.0.0.1:8080/carddav/` |
 
-```sh
-go install github.com/dennwc/flatpak-go-mod@latest
-flatpak-go-mod .                        # writes go.mod.yml and modules.txt
-mv go.mod.yml modules.txt build/flatpak/
-```
+On GNOME, **Settings → Online Accounts → Calendar, Contacts and Files** sets up
+both at once. [docs/SETUP.md](docs/SETUP.md) covers that and every other client,
+including the details that are easy to get wrong.
 
-## Usage
-
-There is also a small GTK window, `carbonate-gui`, for logging in and starting
-the server without keeping a terminal open. It runs the same server from the
-same package, so the two cannot drift apart. See
-[Building the GUI](#building-the-gui).
+## Commands
 
 ```sh
 carbonate auth <username>   # log in to Proton, store an encrypted session
@@ -158,120 +155,11 @@ Deleted event meeting@example.com
 to know whether Proton has seen it before. The write path is therefore
 exercised exactly as the DAV endpoint will use it.
 
-`auth` prints a randomly generated **bridge password** once. It encrypts the
-session file, and your DAV clients will use it as their password.
+There is also `carbonate-gui`, a small GTK window for logging in and starting
+the server without keeping a terminal open. It runs the same server from the
+same package, so the two cannot drift apart.
 
-### Connecting a client
-
-With `carbonate serve` running, sign in as your Proton address with the bridge
-password:
-
-| | |
-|---|---|
-| Calendar | `http://127.0.0.1:8080/caldav/` |
-| Contacts | `http://127.0.0.1:8080/carddav/` |
-
-On GNOME, **Settings → Online Accounts → Calendar, Contacts and Files** sets
-up both at once. Type the `http://` yourself — left to itself the field
-assumes `https`, which nothing here speaks — and leave Files empty.
-
-Otherwise, per app: GNOME Calendar takes **Calendars → Add calendar → Add from
-web**, and Evolution, Thunderbird and DAVx5 take the same three values.
-`/.well-known/caldav` and `/.well-known/carddav` both redirect to the right
-principal.
-
-GNOME Contacts has no dialog of its own; it shows whatever Evolution Data
-Server knows about, so the address book has to come from Online Accounts or
-from Evolution. [docs/CLIENTS.md](docs/CLIENTS.md) covers both, and the source
-file to write when neither is available.
-
-Logging in again mints a new bridge password, which every client configured
-with the old one would then reject. `carbonate auth -keep-bridge-password`
-keeps the current one.
-
-HTTP is deliberately unencrypted: the listener binds to loopback only, and
-basic auth is there to stop other local processes reaching your calendar
-rather than to protect the wire.
-
-Set `CARBONATE_BRIDGE_PASSWORD` to run unattended, and `CARBONATE_DEBUG=1` to
-dump every request and response when the API misbehaves — it prints access
-tokens, so leave it off otherwise.
-
-### When a calendar will not sync
-
-Start with `carbonate serve -log`, or open **Activity** in the window. The
-bridge is otherwise silent, and a request that failed is visible only to the
-client that received the failure:
-
-```console
-$ carbonate serve -log
-carbonate: calendar 7WcS1DSk…: read 16 events from Proton
-15:18:09 REPORT    /caldav/principal/calendars/12081a3d…/ 207 208ms
-15:18:09 GET       /caldav/…/does-not-exist@x.ics 404 236ms: no event with UID does-not-exist@x
-```
-
-Read it in two halves. Lines with a time and a status are what your client
-asked for; lines beginning `carbonate:` are what Proton sent. That separates
-the two failures that look identical from the outside:
-
-| What the log shows | What it means |
-|---|---|
-| no requests at all | your client is not polling — see [docs/CLIENTS.md](docs/CLIENTS.md) |
-| requests, but never `reports a change` | the change is not reaching carbonate |
-| `reports a change`, client still empty | your client is not acting on it |
-| a 4xx or 5xx, with a reason | that reason is the bug |
-
-**A new event can take half an hour to appear, and that is normal.** CalDAV has
-no push: the client polls, and most default to a long interval. That is the
-most common report by far, and [docs/CLIENTS.md](docs/CLIENTS.md) explains how
-to shorten it.
-
-`CARBONATE_DEBUG=1` dumps the Proton API traffic underneath all of this. It is
-a last resort rather than a first one — it prints access tokens and every
-encrypted payload.
-
-Inviting someone to an event mails them, because at Proton that is what an
-invitation is — the event alone is invisible to anyone who does not already
-know it is there. Only a change to the guest list is announced, so re-syncing
-a calendar does not mail anybody. `CARBONATE_NO_INVITATIONS=1` turns it off.
-
-## Building the GUI
-
-The window is behind the `gtk` build tag, so the daemon, the tests and CI need
-no C toolchain at all.
-
-```sh
-make gui
-```
-
-It needs `gtk4` and `gobject-introspection` development headers, and a **recent
-GLib** — gotk4 calls functions that Debian and Ubuntu packages do not yet
-provide, so the build fails there on missing symbols. Fedora 44 is new enough.
-
-On an immutable host such as Fedora Silverblue there are no headers and no C
-compiler either; build it in a container:
-
-```sh
-toolbox create carbonate-build
-toolbox run -c carbonate-build sudo dnf install -y gcc glibc-devel gtk4-devel gobject-introspection-devel golang
-toolbox run -c carbonate-build make gui
-```
-
-The result links against the host's own GTK, so it runs outside the container.
-
-## Testing
-
-```sh
-make test       # unit and integration tests
-make race       # the run that matters for concurrent token refresh
-make cover      # coverage summary
-```
-
-Auth is covered by integration tests against the fake Proton server that ships
-with go-proton-api, so login, key unlocking, token rotation and session
-revocation are all exercised without a real account or network access.
-
-## Roadmap
+## Status
 
 Done:
 
@@ -280,18 +168,20 @@ Done:
 - [x] Unattended login via `--password-stdin`
 - [x] Calendar: decrypt, reassemble, create, update, delete
 - [x] Attendees: tokens, encrypted attendee part, RSVP status
+- [x] Invitations mailed to guests over Proton's own iTIP path
 - [x] Reminders, in both directions
 - [x] Contacts: decrypt, split, create, update, delete
-- [x] Serve both over CalDAV and CardDAV, with `getctag`
+- [x] Serve both over CalDAV and CardDAV, with `getctag` and `sync-collection`
 
-Open, each with its reasoning in the issue:
+Not done, and worth knowing before relying on carbonate:
 
-| | |
-|---|---|
-| [#2](https://github.com/develonrails/carbonate/issues/2) | Invitations are never sent to attendees |
+- No tagged release, no Flathub listing, no upgrade path between builds.
+- Cold start on a large account is slow: the first fetch decrypts everything.
+- One Proton account per session file.
 
-One is worth knowing before you rely on carbonate: an attendee is recorded but
-never told they were invited ([#2](https://github.com/develonrails/carbonate/issues/2)).
+Open issues live in
+[the tracker](https://github.com/develonrails/carbonate/issues), each with its
+reasoning.
 
 ## Scope
 
@@ -315,6 +205,9 @@ protocol and a different problem.
 - The session file is a long-lived credential, and the cache holds **decrypted**
   events and contacts on disk. Both are written `0600` — the same trade-off any
   desktop mail client makes, but make it knowingly.
+- HTTP is deliberately unencrypted: the listener binds to loopback only, and
+  basic auth is there to stop other local processes reaching your calendar
+  rather than to protect the wire.
 - Never commit `auth.json` or `calcache-*.json`. They are in `.gitignore`.
 
 ## License

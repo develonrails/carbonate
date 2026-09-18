@@ -52,7 +52,7 @@ PROPFIND/REPORT XML. protoxide vendors go-webdav with an additive patch to emit
 the CalendarServer `getctag` property, which lets clients detect changes without
 rescanning; we want that patch too.
 
-## Serving CalDAV
+## Serving CalDAV and CardDAV
 
 go-webdav derives a resource's kind from **path depth**, not from anything the
 backend says, so the URL layout is not a free choice:
@@ -70,6 +70,13 @@ lets CalDAV and CardDAV share one listener:
 
 Putting the principal at `/` looks tidier and quietly breaks discovery: the
 root is its own resource type and serves only `current-user-principal`.
+
+The root above both prefixes is not a DAV collection, but it still has to
+answer `OPTIONS` with a `DAV` header. That is the first question a client with
+only a hostname asks, and a plain page without the header reads as "not a
+WebDAV server" — GNOME Online Accounts gives up there and never reaches the
+well-known paths, however correct they are. RFC 4918 section 10.1 asks for the
+header anyway.
 
 Proton has a single, unnamed collection of contacts, so the CardDAV address
 book is a fixed one that carbonate neither creates nor deletes.
@@ -92,7 +99,15 @@ The cache is also dropped on our own writes, because Proton records a change in
 its event loop a moment after accepting it — straight after a write the token
 still reads as it did before.
 
-Contacts have no such token, so they are cached until carbonate writes.
+Contacts have no event loop, so their ctag is a hash of the contact listing:
+every id with its modify time. That listing is metadata, so it costs one
+request and no decryption — which matters, because a client asks for it on
+every poll. It catches all three kinds of change: an id appears, an id's time
+moves, an id goes away.
+
+The core event loop's latest id would be cheaper still, and wrong: it moves
+whenever any mail arrives, and each of those would send the client off to
+refetch and decrypt an address book that had not changed.
 
 The DAV backends take a `Store` interface rather than a Proton connection.
 The methods are the operations DAV performs, not a window onto the API, which
@@ -108,7 +123,7 @@ calendar worked: Evolution read the single merged privilege element, saw
 ### Making a client see a writable collection
 
 GNOME Calendar connected on the first try but showed the calendar as
-read-only. Two deviations in go-webdav 0.7.0 cause it, and `compat.go`
+read-only. Two deviations in go-webdav 0.7.0 cause it, and `internal/davcompat`
 corrects both on the way out rather than forking the library:
 
 - **`<privilege><read/><write/></privilege>`.** RFC 3744 defines
@@ -120,7 +135,7 @@ corrects both on the way out rather than forking the library:
   cannot be written to. `PUT`, `GET` and `HEAD` are added.
 
 - **No `getctag`.** The CalendarServer property that lets a client skip a sync
-  entirely is absent, so `compat.go` supplies it: the name is removed from the
+  entirely is absent, so davcompat supplies it: the name is removed from the
   PROPFIND before go-webdav sees it — asking for a property it does not know
   earns a 404 propstat that would then have to be unpicked — and the answer is
   added to the response afterwards.
@@ -140,7 +155,7 @@ corrects both on the way out rather than forking the library:
   in that case rather than calling the matcher.
 
 - **`supported-report-set` answers 404**, and **`sync-collection` is not
-  handled at all**. `compat.go` supplies the first and answers the second, so
+  handled at all**. davcompat supplies the first and answers the second, so
   nothing is advertised that is not served.
 
 ### sync-collection
@@ -191,31 +206,15 @@ mean a second client learns of it a moment later.
 - `internal/calendar` — reading, decrypting, splitting and writing events.
 - `internal/contacts` — the same for contacts, which need far less work: Proton
   stores them as vCards already and go-proton-api merges the cards on read.
-- `internal/caldav` — go-webdav backend mapping CalDAV onto `internal/calendar`,
-  plus `compat.go`, which corrects go-webdav's responses.
+- `internal/caldav` — go-webdav backend mapping CalDAV onto `internal/calendar`.
 - `internal/carddav` — the same for CardDAV over `internal/contacts`.
-
-## Verified against a live account
-
-The read path is not theoretical. Against a real Proton account with one
-all-day event, carbonate decrypts and reassembles:
-
-```
-Test kalender! — 1 event(s)
-  2026-09-15 (all day)  Test!
-```
-
-The event arrives in three encrypted pieces, each its own complete VCALENDAR:
-
-| Part | Type | Contents |
-|---|---|---|
-| `SharedEvents[0]` | signed, cleartext | `UID`, `DTSTAMP`, `DTSTART;VALUE=DATE`, `SEQUENCE` |
-| `SharedEvents[1]` | encrypted + signed | `SUMMARY` |
-| `CalendarEvents[0]` | signed, cleartext | `STATUS` |
-
-Reassembly merges the VEVENT bodies and drops the duplicated wrappers — `UID`
-and `DTSTAMP` repeat in every part and must appear once, while `ATTENDEE` and
-`EXDATE` legitimately repeat and must not be deduplicated.
+- `internal/davcompat` — the corrections both protocols need to go-webdav's
+  responses, in one place rather than two. They lived in `internal/caldav`
+  first, and the copy CardDAV never got is why the address book stayed
+  read-only and never synced long after the calendar worked.
+- `internal/server` — one listener serving both, with basic auth and the
+  activity log. Shared by the command line and the window so the two cannot
+  drift apart.
 
 ## Proton's data model
 
@@ -249,13 +248,30 @@ Write: decide which property belongs in which part, generate session keys, sign.
 **Getting this split wrong corrupts data that the Proton web app then shows
 incorrectly.** This is the highest-risk area in the project.
 
+An event arrives in several encrypted pieces, each its own complete VCALENDAR.
+A one-line all-day event from a real account looks like this:
+
+| Part | Type | Contents |
+|---|---|---|
+| `SharedEvents[0]` | signed, cleartext | `UID`, `DTSTAMP`, `DTSTART;VALUE=DATE`, `SEQUENCE` |
+| `SharedEvents[1]` | encrypted + signed | `SUMMARY` |
+| `CalendarEvents[0]` | signed, cleartext | `STATUS` |
+
+Reassembly merges the VEVENT bodies and drops the duplicated wrappers — `UID`
+and `DTSTAMP` repeat in every part and must appear once, while `ATTENDEE` and
+`EXDATE` legitimately repeat and must not be deduplicated.
+
+
 ## Sync
 
 Proton exposes an event-loop endpoint returning deltas since a known event ID.
 Poll roughly every 30s, patch only changed items into the cache, and bump the
 DAV `ctag` / `sync-token` so clients fetch just the delta.
 
-## Gotchas found the hard way
+## What Proton actually does
+
+Each of these cost a day or more to find, and none of them is written down
+anywhere Proton publishes.
 
 - **Key salts need a scope a refreshed session loses.** The bridge kept
   stopping with `403 ... Access token does not have sufficient scope` on
@@ -342,6 +358,28 @@ DAV `ctag` / `sync-token` so clients fetch just the delta.
   up either way — only the commentary goes. What silence does cost is resty's
   warning about a request that was retried and then succeeded, which nothing
   else reports because nothing went wrong.
+
+- **Contacts are encrypted to the user key, not the address key.** Proton's own
+  web app encrypts and signs a new contact with the account's user key and
+  reads it back with that alone. carbonate used the primary address key, which
+  fails outright rather than partially: "incorrect key", and the listing stops
+  at the first such card, so one contact written elsewhere hid every other
+  contact behind a 500.
+
+  The reverse was worse and invisible from here. Everything carbonate wrote was
+  something Proton could not open — its web app shows "The decryption of the
+  encrypted content failed" and offers to discard the data — while carbonate
+  read its own writes back perfectly, so every test from this side passed. It
+  took looking at the account in Proton's client to see it.
+
+  Reads therefore use a keyring holding both kinds and let OpenPGP pick by key
+  id; writes use the user key. A contact that still cannot be decrypted is
+  named in the log and skipped, because an error would leave the client with no
+  address book at all.
+- **go-webdav answers every PUT with 201 Created**, and marks the gap with a
+  TODO of its own. A client is entitled to read that as a new resource having
+  appeared. The backend is the only thing that knows which happened, so it says
+  so through the request context and davcompat turns the reply into 204.
 
 ## The write path
 
@@ -574,20 +612,16 @@ afternoon to it:
    calendar member's own address — we are writing to our own calendar, so we
    are the organiser.
 
-## Known hard parts
+## Still hard
 
-1. **Login.** SRP plus 2FA plus a human-verification CAPTCHA. protoxide opens a
-   browser popup for the challenge so credentials never pass through the app.
-2. **Token refresh.** protoxide requires manual re-auth on expiry. Fixing this
-   is the main reason carbonate exists — do it early, not last.
-3. **Scheduling.** iTIP invitations travel over mail at Proton. protoxide does
-   no server-side scheduling by design; decide deliberately whether we do.
-   carbonate now shares the session key with Proton guests, which is the half
-   of the problem that needs no SMTP path — the mail half still does.
-4. **Recurrence exceptions and attendees.** The usual calendar edge cases, made
-   worse by the encrypted split above.
-5. **Cold start.** First full fetch and decrypt takes minutes for thousands of
-   events. Cache aggressively.
-6. **Signature verification.** protoxide leaves two upstream cryptographic
-   checks disabled, so some old or imported events are served with an unverified
-   signature. Understand why before copying that decision.
+Login, silent token refresh and mailing invitations were the three this project
+set out to solve, and all three are done. What remains:
+
+1. **Recurrence exceptions and attendees.** The usual calendar edge cases, made
+   worse by the encrypted split above. Handled, but the area where a new bug is
+   most likely.
+2. **Cold start.** The first full fetch and decrypt takes minutes for thousands
+   of events. The cache makes it a one-off, not a non-issue.
+3. **Signature verification.** protoxide leaves two upstream cryptographic
+   checks disabled, so some old or imported events are served with an
+   unverified signature. Understand why before copying that decision.
