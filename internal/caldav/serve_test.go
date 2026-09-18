@@ -1,18 +1,23 @@
 package caldav
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/emersion/go-ical"
 	"github.com/emersion/go-webdav/caldav"
+
+	"github.com/develonrails/carbonate/internal/calendar"
 )
 
 func backendWith(store Store) *Backend {
-	return New(store)
+	return New(store, nil)
 }
 
 func calendarPath(t *testing.T, b *Backend) string {
@@ -248,4 +253,91 @@ func mustTime(value string) time.Time {
 	}
 
 	return t
+}
+
+// The shape of issue #18, at the layer the client actually sees.
+//
+// A calendar whose events cannot be read answers every listing with 500. GNOME
+// Calendar shows an empty calendar rather than an error, so that is
+// indistinguishable from Proton having sent nothing — which is exactly how it
+// was reported. This pins the mechanism: the 500 is what has to stop happening
+// for one bad event, not the listing that follows it.
+func TestFailedEventReadAnswersTheCollectionWith500(t *testing.T) {
+	fake := newFake()
+	b := backendWith(fake)
+	path := calendarPath(t, b)
+
+	body := `<propfind xmlns="DAV:"><prop><getetag/></prop></propfind>`
+
+	listing := func() int {
+		req := httptest.NewRequest("PROPFIND", path, strings.NewReader(body))
+		req.Header.Set("Depth", "1")
+		req.Header.Set("Content-Type", "application/xml")
+
+		rec := httptest.NewRecorder()
+		b.Handler().ServeHTTP(rec, req)
+
+		return rec.Code
+	}
+
+	if got := listing(); got != http.StatusMultiStatus {
+		t.Fatalf("a readable calendar answered %d, want 207", got)
+	}
+
+	// One event carbonate cannot decode used to fail the whole read, which is
+	// what this store is standing in for.
+	fake.err = errors.New("decoding event G4Vr: Signature Verification Error")
+
+	if got := listing(); got != http.StatusInternalServerError {
+		t.Fatalf("a calendar whose events fail to read answered %d, want 500", got)
+	}
+}
+
+// Decrypting is only the first place one event could empty a calendar;
+// reassembling it into an iCalendar object is the second, and it ends the same
+// way — an error from the listing, a 500, and a client showing nothing.
+//
+// The event that will not render is left out and named, and the rest of the
+// calendar is served.
+func TestUnrenderableEventIsSkippedAndNamed(t *testing.T) {
+	fake := newFake()
+	fake.events["cal-1"] = append(fake.events["cal-1"], calendar.Event{
+		ID:         "event-2",
+		UID:        "broken@example.com",
+		Modified:   time.Unix(1000, 0),
+		Properties: []string{"UID:broken@example.com", "this line has no colon"},
+	})
+
+	var log bytes.Buffer
+
+	b := New(fake, &log)
+	path := calendarPath(t, b)
+
+	objects, err := b.ListCalendarObjects(context.Background(), path, nil)
+	if err != nil {
+		t.Fatalf("one unrenderable event failed the whole listing: %v", err)
+	}
+
+	if len(objects) != 1 {
+		t.Fatalf("listed %d objects, want the 1 that could be rendered", len(objects))
+	}
+
+	if !strings.Contains(objects[0].Path, "meeting@example.com") {
+		t.Errorf("listed %q, want the readable event", objects[0].Path)
+	}
+
+	if !strings.Contains(log.String(), "broken@example.com") {
+		t.Errorf("the skipped event was not named:\n%s", log.String())
+	}
+
+	// A listing runs on every poll, so the same event must not fill the log.
+	before := log.Len()
+
+	if _, err := b.ListCalendarObjects(context.Background(), path, nil); err != nil {
+		t.Fatalf("second listing: %v", err)
+	}
+
+	if log.Len() != before {
+		t.Errorf("the same event was named twice:\n%s", log.String())
+	}
 }
