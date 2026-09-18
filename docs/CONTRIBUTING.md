@@ -19,11 +19,50 @@ Auth is covered by integration tests against the fake Proton server that ships
 with go-proton-api, so login, key unlocking, token rotation and session
 revocation are all exercised without a real account or network access.
 
-The fake server is not a full stand-in. It predates Proton's anonymous-session
-requirement and hardcodes one-password mode, so those two paths are covered by
-unit tests rather than end to end — see
-[ARCHITECTURE.md](ARCHITECTURE.md#what-proton-actually-does) for what that
-means in practice.
+`internal/protontest` wraps that server and serves what it does not.
+
+## Keeping the fake Proton honest
+
+**When the real Proton turns out to do something other than what carbonate
+assumed, `internal/protontest` has to learn it too.** A fake nobody updates is
+worse than no fake at all: it keeps agreeing with the assumption that was
+already wrong, and reports confidence it has not earned.
+
+This is not hypothetical. Every bug found against the live account so far came
+from an assumption, not from a mistake in the code — and a fake written from
+the same assumption would have passed each one.
+
+The contact tests show what that costs and what it buys.
+`TestPutThenListReturnsTheContact` writes a contact and reads it back, and it
+passes whether carbonate encrypts to the address key or the user key, because
+carbonate reads with the same key it wrote with. Only
+`TestContactsAreEncryptedToTheUserKey` fails, because it asks the question
+Proton will ask: can the user key *alone* open this?
+
+So a test that proves carbonate agrees with itself proves very little. Write
+the one that stands where Proton stands.
+
+### What protontest corrects
+
+go-proton-api's fake covers authentication well, and its contact routes are
+built on a different model from the real API:
+
+- It creates **one contact per card**, where a contact *is* its set of cards.
+  Writing one contact through it yields two.
+- It pages the listing with an index that **goes out of range on an empty
+  account** — where every test starts, and every new Proton user.
+- It has **no bulk export**, which is how carbonate reads an address book, and
+  **no delete** at all.
+
+So protontest serves the contact routes itself and proxies the rest. The fake
+also predates Proton's anonymous-session requirement and hardcodes
+one-password mode, so those two paths are covered by unit tests rather than
+end to end — see
+[ARCHITECTURE.md](ARCHITECTURE.md#what-proton-actually-does).
+
+There are **no calendar routes at all**, upstream or here. `internal/calendar`
+is tested against its own fakes, and the write path is verified by hand
+against a live account. That is the largest remaining gap in the test suite.
 
 ## Building the GUI
 
