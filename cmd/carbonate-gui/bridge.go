@@ -220,6 +220,7 @@ func (b *bridge) start(address string, activity io.Writer, watch time.Duration) 
 	}
 
 	conn, email, password := b.conn, b.email, b.password
+	paths := server.PathsFile(b.path)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -240,6 +241,7 @@ func (b *bridge) start(address string, activity io.Writer, watch time.Duration) 
 			Out:      io.Discard,
 			Activity: activity,
 			Watch:    watch,
+			Paths:    paths,
 		})
 	}()
 

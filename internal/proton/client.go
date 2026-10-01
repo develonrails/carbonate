@@ -134,6 +134,14 @@ func (c *Conn) Put(ctx context.Context, path string, body, out any) error {
 	return c.do(ctx, http.MethodPut, path, body, out)
 }
 
+// Post sends body as JSON and decodes the response into out.
+//
+// Creating a calendar, and giving it a key, are the two places Proton wants
+// a POST; go-proton-api has neither.
+func (c *Conn) Post(ctx context.Context, path string, body, out any) error {
+	return c.do(ctx, http.MethodPost, path, body, out)
+}
+
 func (c *Conn) do(ctx context.Context, method, path string, body, out any) error {
 	status, err := c.attempt(ctx, method, path, body, out)
 	if err != nil {
@@ -217,7 +225,7 @@ func (c *Conn) attempt(ctx context.Context, method, path string, body, out any) 
 		return res.StatusCode, nil
 	}
 
-	if res.StatusCode != http.StatusOK {
+	if res.StatusCode < 200 || res.StatusCode > 299 {
 		// Proton puts the useful reason in the body, not the status line.
 		return res.StatusCode, fmt.Errorf("requesting %s: %s: %s", path, res.Status, strings.TrimSpace(string(raw)))
 	}

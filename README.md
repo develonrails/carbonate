@@ -186,6 +186,7 @@ Done:
 - [x] Attendees: tokens, encrypted attendee part, RSVP status
 - [x] Invitations mailed to guests over Proton's own iTIP path
 - [x] Reminders, in both directions
+- [x] Calendars: create, rename and recolour from a client
 - [x] Contacts: decrypt, split, create, update, delete
 - [x] Serve both over CalDAV and CardDAV, with `getctag` and `sync-collection`
 
@@ -195,6 +196,9 @@ Not done, and worth knowing before relying on carbonate:
   `main` rather than a version anyone has decided is ready.
 - Cold start on a large account is slow: the first fetch decrypts everything.
 - One Proton account per session file.
+- A calendar cannot be deleted from a client. Proton refuses that to the
+  bridge's session (403, code 9101: insufficient scope). Delete it in the web
+  app.
 
 Open issues live in
 [the tracker](https://github.com/develonrails/carbonate/issues), each with its

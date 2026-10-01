@@ -140,6 +140,37 @@ func (s *loggingStore) Delete(ctx context.Context, calendarID, uid string) (bool
 	return deleted, nil
 }
 
+func (s *loggingStore) CreateCalendar(ctx context.Context, name, color string) (string, error) {
+	id, err := s.Store.CreateCalendar(ctx, name, color)
+	if err != nil {
+		s.printf("creating calendar %q failed: %v", name, err)
+
+		return id, err
+	}
+
+	s.printf("calendar %s: created as %q", short(id), name)
+
+	return id, nil
+}
+
+func (s *loggingStore) UpdateCalendar(ctx context.Context, calendarID string, name, color *string) error {
+	if err := s.Store.UpdateCalendar(ctx, calendarID, name, color); err != nil {
+		s.printf("calendar %s: updating failed: %v", short(calendarID), err)
+
+		return err
+	}
+
+	if name != nil {
+		s.printf("calendar %s: renamed to %q", short(calendarID), *name)
+	}
+
+	if color != nil {
+		s.printf("calendar %s: recoloured", short(calendarID))
+	}
+
+	return nil
+}
+
 func (s *loggingStore) printf(format string, args ...any) {
 	fmt.Fprintf(s.out, "carbonate: "+format+"\n", args...)
 }
