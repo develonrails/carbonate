@@ -23,6 +23,7 @@ import (
 	glibv2 "github.com/diamondburned/gotk4/pkg/glib/v2"
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 
+	"github.com/develonrails/carbonate/internal/proton"
 	"github.com/develonrails/carbonate/internal/session"
 )
 
@@ -208,6 +209,15 @@ func (u *ui) reveal() {
 	u.window.Present()
 }
 
+// offlineGrace is how long a start at login waits for Proton to become
+// reachable before asking a person instead. Long enough for a network that is
+// still coming up; short enough not to leave a window nobody can open — while
+// it is hidden, the launcher only holds the application.
+const offlineGrace = 2 * time.Minute
+
+// offlineRetryMax caps the wait between attempts, which doubles from a second.
+const offlineRetryMax = 15 * time.Second
+
 // unlockFromKeyring opens the session with the remembered password and starts
 // serving, without anybody being asked anything.
 //
@@ -219,6 +229,11 @@ func (u *ui) reveal() {
 // Every failure here is quiet and falls back to the unlock page that is
 // already showing. A machine with no keyring, a locked one, or a password
 // that no longer fits are all reasons to ask rather than to complain.
+//
+// Proton being unreachable is not one of them. At login the network is often
+// still coming up, and a bridge that gives up then shows a person a password
+// prompt for a password that was right all along. So that one failure is
+// waited out, for a while, before anyone is asked anything.
 func (u *ui) unlockFromKeyring() {
 	password, found, err := session.Recall(u.bridge.sessionPath())
 	if err != nil || !found {
@@ -228,7 +243,21 @@ func (u *ui) unlockFromKeyring() {
 	}
 
 	go func() {
-		if err := u.bridge.unlock(context.Background(), password); err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), offlineGrace)
+		defer cancel()
+
+		// The session opened, or unlock would not have got as far as
+		// Proton: from here only connecting is retried.
+		err := u.bridge.unlock(ctx, password)
+		for delay := time.Second; proton.Offline(err); delay = min(2*delay, offlineRetryMax) {
+			if !wait(ctx, delay) {
+				break
+			}
+
+			err = u.bridge.connect(ctx)
+		}
+
+		if err != nil {
 			glib.IdleAdd(func() { u.reveal() })
 
 			return
