@@ -53,6 +53,10 @@ func MarkReplaced(ctx context.Context) {
 // CTagFunc returns the change token of the collection at a path.
 type CTagFunc func(ctx context.Context, path string) (string, error)
 
+// ColorFunc returns the colour of the calendar collection at a path, as
+// #RRGGBB.
+type ColorFunc func(ctx context.Context, path string) (string, error)
+
 // SyncFunc answers a sync-collection report, reporting whether it did.
 type SyncFunc func(w http.ResponseWriter, r *http.Request) bool
 
@@ -64,6 +68,9 @@ type Options struct {
 
 	// CTag supplies the collection's change token, if there is one.
 	CTag CTagFunc
+
+	// Color supplies a calendar collection's colour, if it has one.
+	Color ColorFunc
 
 	// ServeSync answers a sync-collection report, if the protocol has one.
 	ServeSync SyncFunc
@@ -84,7 +91,7 @@ func Wrap(next http.Handler, opts Options) http.Handler {
 			}
 		}
 
-		wantCTag, wantReports := false, false
+		wantCTag, wantReports, wantColor := false, false, false
 
 		if r.Method == "PROPFIND" && r.Body != nil {
 			body, err := io.ReadAll(r.Body)
@@ -93,6 +100,7 @@ func Wrap(next http.Handler, opts Options) http.Handler {
 
 				stripped, wantCTag = stripProp(body, "getctag")
 				stripped, wantReports = stripProp(stripped, "supported-report-set")
+				stripped, wantColor = stripProp(stripped, "calendar-color")
 				stripped = fillEmptyProp(stripped)
 
 				r.Body = io.NopCloser(bytes.NewReader(stripped))
@@ -120,6 +128,19 @@ func Wrap(next http.Handler, opts Options) http.Handler {
 				}
 
 				return fmt.Sprintf(`<getctag xmlns="http://calendarserver.org/ns/">%s</getctag>`, html.EscapeString(value)), true
+			}))
+		}
+
+		if wantColor && opts.Color != nil {
+			rec.body = *bytes.NewBuffer(injectCTags(rec.body.Bytes(), func(href string) (string, bool) {
+				value, err := opts.Color(r.Context(), href)
+				if err != nil || value == "" {
+					return "", false
+				}
+
+				// Apple's property, in Apple's form: the colour with an alpha
+				// after it. Clients that want six digits take the first six.
+				return fmt.Sprintf(`<calendar-color xmlns="http://apple.com/ns/ical/">%sFF</calendar-color>`, html.EscapeString(value)), true
 			}))
 		}
 

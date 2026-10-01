@@ -292,6 +292,7 @@ func cmdServe(ctx context.Context, args []string, out io.Writer) error {
 		Out:      out,
 		Activity: activity,
 		Watch:    *watch,
+		Paths:    server.PathsFile(sessionPath),
 	})
 }
 

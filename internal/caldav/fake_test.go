@@ -3,6 +3,7 @@ package caldav
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 
@@ -120,6 +121,41 @@ func (f *fakeStore) Delete(_ context.Context, calendarID, uid string) (bool, err
 	f.events[calendarID] = kept
 
 	return found, nil
+}
+
+func (f *fakeStore) CreateCalendar(_ context.Context, name, color string) (string, error) {
+	if f.err != nil {
+		return "", f.err
+	}
+
+	id := "cal-" + strconv.Itoa(len(f.calendars)+1)
+	f.calendars = append(f.calendars, calendar.Calendar{ID: id, Name: name, Color: color})
+
+	return id, nil
+}
+
+func (f *fakeStore) UpdateCalendar(_ context.Context, calendarID string, name, color *string) error {
+	if f.err != nil {
+		return f.err
+	}
+
+	for i := range f.calendars {
+		if f.calendars[i].ID != calendarID {
+			continue
+		}
+
+		if name != nil {
+			f.calendars[i].Name = *name
+		}
+
+		if color != nil {
+			f.calendars[i].Color = *color
+		}
+
+		return nil
+	}
+
+	return errors.New("no such calendar")
 }
 
 func (f *fakeStore) ChangeToken(context.Context, string) (string, error) {

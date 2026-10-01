@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"path/filepath"
 	"time"
 
 	"github.com/develonrails/carbonate/internal/caldav"
@@ -45,6 +46,20 @@ type Options struct {
 	// Proton is visible in Activity even when nothing is connected, and so
 	// that the cache is warm when something finally is.
 	Watch time.Duration
+
+	// Paths is the file that keeps the addresses of calendars created
+	// through carbonate. Empty keeps them only while the process lives.
+	Paths string
+}
+
+// PathsFile returns where the addresses of calendars created through
+// carbonate are kept: beside the session of the account they belong to.
+func PathsFile(sessionPath string) string {
+	if sessionPath == "" {
+		return ""
+	}
+
+	return filepath.Join(filepath.Dir(sessionPath), "calendar-paths.json")
 }
 
 // Serve runs the CalDAV and CardDAV server until the context is cancelled.
@@ -59,6 +74,14 @@ func Serve(ctx context.Context, conn *proton.Conn, opts Options) error {
 	activity := Stamped(opts.Activity)
 
 	calendars := caldav.New(caldav.Logging(caldav.NewStore(conn, activity), activity), activity)
+
+	if opts.Paths != "" {
+		// Not worth refusing to start over: every calendar is still served,
+		// and only the ones created through carbonate would move.
+		if err := calendars.RememberPaths(opts.Paths); err != nil {
+			fmt.Fprintf(out, "carbonate: %v\n", err)
+		}
+	}
 	addressBook := carddav.New(carddav.NewStore(conn, activity))
 
 	go calendars.Watch(ctx, opts.Watch, activity)
