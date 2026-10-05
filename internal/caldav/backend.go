@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -51,9 +52,13 @@ type Backend struct {
 	// there. CalDAV lets the client name the resource, and that name need not
 	// be the UID — Proton only knows the UID, so the two must be tied
 	// together or a later GET or DELETE cannot find the event again.
+	//
+	// colors maps the same path segment to the calendar's colour, as the
+	// last listing gave it.
 	mu     sync.RWMutex
 	tokens map[string]string
 	names  map[string]string
+	colors map[string]string
 
 	// uids remembers which UID each Proton event ID was served under, so that
 	// a deletion — which Proton reports by ID alone — can still be named to a
@@ -64,6 +69,11 @@ type Backend struct {
 	// remembers which have been, since a listing runs on every poll.
 	out  io.Writer
 	said map[string]bool
+
+	// paths holds the addresses of calendars created through carbonate, and
+	// creating lets one of them be made at a time.
+	paths    *paths
+	creating sync.Mutex
 }
 
 // New returns a backend reading and writing through store.
@@ -79,20 +89,54 @@ func New(store Store, out io.Writer) *Backend {
 		cache:  cache.New[calendar.Event](),
 		tokens: make(map[string]string),
 		names:  make(map[string]string),
+		colors: make(map[string]string),
 		uids:   make(map[string]map[string]string),
 		out:    out,
 		said:   make(map[string]bool),
+		paths:  &paths{byID: make(map[string]string)},
 	}
+}
+
+// RememberPaths keeps the addresses of calendars created through carbonate
+// in file, so that they are still where the client left them after a
+// restart. Without it they are remembered only while the process lives.
+func (b *Backend) RememberPaths(file string) error {
+	loaded, err := loadPaths(file)
+
+	b.mu.Lock()
+	b.paths = loaded
+	b.mu.Unlock()
+
+	return err
 }
 
 // Handler returns an http.Handler serving CalDAV for this backend.
 func (b *Backend) Handler() http.Handler {
-	return davcompat.Wrap(&caldav.Handler{Backend: b, Prefix: prefix}, davcompat.Options{
+	dav := davcompat.Wrap(&caldav.Handler{Backend: b, Prefix: prefix}, davcompat.Options{
 		SupportedReports: supportedReportSet,
 		CTag:             b.ctag,
+		Color:            b.color,
 		ServeSync: func(w http.ResponseWriter, r *http.Request) bool {
 			return serveSync(w, r, b.sync)
 		},
+	})
+
+	// Making and changing a calendar are answered here: go-webdav knows
+	// neither MKCALENDAR nor PROPPATCH. See collections.go.
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "MKCALENDAR":
+			b.serveMkcalendar(w, r)
+
+			return
+
+		case "PROPPATCH":
+			if b.servePropPatch(w, r) {
+				return
+			}
+		}
+
+		dav.ServeHTTP(w, r)
 	})
 }
 
@@ -127,6 +171,28 @@ func (b *Backend) ctag(ctx context.Context, p string) (string, error) {
 	return token, nil
 }
 
+// color returns a calendar's colour as Proton has it.
+//
+// A client that is told nothing picks a colour of its own and writes it back,
+// so a server that accepts a colour but never reports one has every calendar
+// repainted by the first client to see it.
+func (b *Backend) color(ctx context.Context, p string) (string, error) {
+	if !isCalendarPath(p) {
+		return "", webdav.NewHTTPError(http.StatusNotFound, fmt.Errorf("not a calendar collection: %s", p))
+	}
+
+	// Resolving the path lists the calendars if this one is not known yet,
+	// and the listing is what fills in the colours.
+	if _, err := b.calendarID(ctx, p); err != nil {
+		return "", err
+	}
+
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	return b.colors[calendarSegment(p)], nil
+}
+
 func (b *Backend) CurrentUserPrincipal(ctx context.Context) (string, error) {
 	return principalPath, nil
 }
@@ -142,17 +208,34 @@ func token(id string) string {
 }
 
 func (b *Backend) ListCalendars(ctx context.Context) ([]caldav.Calendar, error) {
+	b.mu.RLock()
+	kept := b.paths
+	b.mu.RUnlock()
+
+	// Read before the listing, so that a calendar created while Proton was
+	// answering is not mistaken for one that has gone.
+	version := kept.version()
+
 	calendars, err := b.store.Calendars(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	out := make([]caldav.Calendar, 0, len(calendars))
+	ids := make(map[string]bool, len(calendars))
 
 	b.mu.Lock()
 	for _, c := range calendars {
-		t := token(c.ID)
+		ids[c.ID] = true
+
+		// A calendar a client created stays at the address the client chose.
+		t, chosen := kept.segment(c.ID)
+		if !chosen {
+			t = token(c.ID)
+		}
+
 		b.tokens[t] = c.ID
+		b.colors[t] = c.Color
 
 		name := c.Name
 		if name == "" {
@@ -166,6 +249,8 @@ func (b *Backend) ListCalendars(ctx context.Context) ([]caldav.Calendar, error) 
 		})
 	}
 	b.mu.Unlock()
+
+	kept.keep(ids, version)
 
 	return out, nil
 }
@@ -187,8 +272,23 @@ func (b *Backend) GetCalendar(ctx context.Context, p string) (*caldav.Calendar, 
 	return nil, webdav.NewHTTPError(http.StatusNotFound, fmt.Errorf("no such calendar: %s", p))
 }
 
+// CreateCalendar is how an extended MKCOL arrives. MKCALENDAR, which is what
+// clients actually send, takes the same road from serveMkcalendar.
 func (b *Backend) CreateCalendar(ctx context.Context, c *caldav.Calendar) error {
-	return webdav.NewHTTPError(http.StatusForbidden, fmt.Errorf("carbonate cannot create calendars; make it in the Proton web app"))
+	props := collectionProps{components: c.SupportedComponentSet}
+
+	if c.Name != "" {
+		props.name = &c.Name
+	}
+
+	err := b.create(ctx, c.Path, props)
+
+	var refused *refusal
+	if errors.As(err, &refused) {
+		return webdav.NewHTTPError(refused.code, refused.err)
+	}
+
+	return err
 }
 
 // calendarID resolves the calendar segment of a path to a Proton ID,

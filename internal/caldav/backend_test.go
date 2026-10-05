@@ -174,14 +174,6 @@ func TestPrincipalAndHomeSet(t *testing.T) {
 	}
 }
 
-// Calendars are made in Proton, not through the bridge. Refusing plainly beats
-// accepting and quietly doing nothing.
-func TestCalendarCreationIsRefused(t *testing.T) {
-	if err := newBackend().CreateCalendar(context.Background(), nil); err == nil {
-		t.Error("creating a calendar was allowed")
-	}
-}
-
 // go-webdav infers a resource's kind from path depth below the prefix, so the
 // layout must not drift: principal 1, home set 2, calendar 3, event 4.
 func TestPathDepths(t *testing.T) {

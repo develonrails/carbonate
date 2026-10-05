@@ -30,6 +30,13 @@ type Store interface {
 	// there.
 	Delete(ctx context.Context, calendarID, uid string) (bool, error)
 
+	// CreateCalendar makes a calendar and returns its ID.
+	CreateCalendar(ctx context.Context, name, color string) (id string, err error)
+
+	// UpdateCalendar renames or recolours a calendar. A nil argument leaves
+	// that detail as it is.
+	UpdateCalendar(ctx context.Context, calendarID string, name, color *string) error
+
 	// ChangeToken returns a value that changes whenever anything in the
 	// calendar does, and only then.
 	ChangeToken(ctx context.Context, calendarID string) (string, error)
@@ -110,6 +117,14 @@ func (s *protonStore) Put(ctx context.Context, calendarID, ics string) (string, 
 
 func (s *protonStore) Delete(ctx context.Context, calendarID, uid string) (bool, error) {
 	return calendar.Delete(ctx, s.conn, calendarID, uid)
+}
+
+func (s *protonStore) CreateCalendar(ctx context.Context, name, color string) (string, error) {
+	return calendar.Create(ctx, s.conn, name, color)
+}
+
+func (s *protonStore) UpdateCalendar(ctx context.Context, calendarID string, name, color *string) error {
+	return calendar.Update(ctx, s.conn, calendarID, name, color)
 }
 
 // ChangeToken reads the calendar event loop's latest ID.
