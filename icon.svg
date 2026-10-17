@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="page" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#d8dbe8"/>
+    </linearGradient>
+  </defs>
+
+  <!-- The calendar page: what carbonate serves. -->
+  <rect x="22" y="26" width="84" height="80" rx="12" fill="url(#page)"/>
+  <rect x="22" y="26" width="84" height="22" rx="12" fill="#6d4aff"/>
+  <rect x="22" y="40" width="84" height="8" fill="#6d4aff"/>
+
+  <!-- Binding rings. -->
+  <rect x="40" y="16" width="9" height="20" rx="4.5" fill="#3b3663"/>
+  <rect x="79" y="16" width="9" height="20" rx="4.5" fill="#3b3663"/>
+
+  <!-- The page dissolving into bubbles: carbonation, and the point of the
+       app — the calendar leaves Proton and turns into something local. -->
+  <circle cx="44" cy="70" r="7" fill="#6d4aff"/>
+  <circle cx="66" cy="66" r="5" fill="#8c72ff"/>
+  <circle cx="84" cy="74" r="4" fill="#a892ff"/>
+  <circle cx="54" cy="88" r="4.5" fill="#8c72ff"/>
+  <circle cx="74" cy="92" r="3" fill="#a892ff"/>
+  <circle cx="92" cy="88" r="2.5" fill="#c4b6ff"/>
+</svg>
