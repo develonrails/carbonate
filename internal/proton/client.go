@@ -365,7 +365,7 @@ func (c *Conn) RevokeSession(ctx context.Context, uid string) error {
 // verifyAndRetry asks a person to answer Proton's challenge and tries the
 // login again with their answer.
 func verifyAndRetry(ctx context.Context, m *api.Manager, username string, password []byte, details *api.APIHVDetails, p Prompter) (*api.Client, api.Auth, error) {
-	token, err := p.Verify(describeVerification(details))
+	token, err := verificationToken(details, p)
 	if err != nil {
 		return nil, api.Auth{}, fmt.Errorf("%w: %v", ErrVerificationNeeded, err)
 	}

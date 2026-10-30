@@ -47,6 +47,14 @@ func (p *stdinPrompter) Verify(message string) (string, error) {
 	return p.readLine("Verification token: ")
 }
 
+// ConfirmCaptcha consumes one confirmation line. EOF is not confirmation;
+// somebody still has to solve the challenge before sending that line.
+func (p *stdinPrompter) ConfirmCaptcha(message string) error {
+	fmt.Fprintf(os.Stderr, "\n%s\n\n", message)
+	_, err := p.readLine("Press Enter once the page says verification is complete: ")
+	return err
+}
+
 func (p *stdinPrompter) readLine(prompt string) (string, error) {
 	line, err := p.r.ReadString('\n')
 

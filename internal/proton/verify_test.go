@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -46,10 +47,68 @@ func TestVerificationURLCarriesTheChallenge(t *testing.T) {
 		}
 	}
 
-	// Embedded mode expects a host page to talk back to, and carbonate has
-	// no browser to provide one.
-	if !strings.Contains(got, "embed=false") {
-		t.Errorf("URL %q does not ask for the standalone page", got)
+	// Proton checks string truthiness: even embed=false enables embedded
+	// mode and skips submitting the proof for an external browser.
+	u, err := url.Parse(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Query().Has("embed") {
+		t.Errorf("URL %q selects embedded mode instead of standalone verification", got)
+	}
+}
+
+func TestCaptchaPromptSuppliesTheTokenToPaste(t *testing.T) {
+	message := describeVerification(hvDetails())
+	// The standalone page does not display a new token. Supply the original
+	// separately from the URL so the person can answer the existing prompt.
+	if !strings.Contains(message, "\n  challenge-token") {
+		t.Errorf("prompt does not supply the original token to paste: %s", message)
+	}
+	if !strings.Contains(message, "After it says verification is complete") {
+		t.Errorf("prompt does not require completing verification first: %s", message)
+	}
+}
+
+type confirmingPrompter struct {
+	verifyPrompter
+	confirmed []string
+	err       error
+}
+
+func (p *confirmingPrompter) ConfirmCaptcha(message string) error {
+	p.confirmed = append(p.confirmed, message)
+	return p.err
+}
+
+func TestCaptchaConfirmationReusesChallengeToken(t *testing.T) {
+	p := &confirmingPrompter{}
+	token, err := verificationToken(hvDetails(), p)
+	if err != nil || token != hvDetails().Token {
+		t.Fatalf("token = %q, err = %v; want original challenge token", token, err)
+	}
+	if len(p.confirmed) != 1 || !strings.Contains(p.confirmed[0], verificationURL(hvDetails())) {
+		t.Fatalf("confirmation did not show the challenge URL: %v", p.confirmed)
+	}
+	if len(p.shown) != 0 {
+		t.Fatal("asked for a token after confirming CAPTCHA completion")
+	}
+}
+
+func TestCaptchaConfirmationFailureDoesNotSupplyToken(t *testing.T) {
+	cancelled := errors.New("input cancelled")
+	p := &confirmingPrompter{err: cancelled}
+	token, err := verificationToken(hvDetails(), p)
+	if !errors.Is(err, cancelled) || token != "" {
+		t.Fatalf("token = %q, err = %v; cancellation must not supply a token", token, err)
+	}
+}
+
+func TestNonCaptchaStillAsksForToken(t *testing.T) {
+	p := &confirmingPrompter{verifyPrompter: verifyPrompter{answer: "email-answer"}}
+	token, err := verificationToken(&api.APIHVDetails{Methods: []string{"email"}, Token: "challenge"}, p)
+	if err != nil || token != "email-answer" || len(p.shown) != 1 || len(p.confirmed) != 0 {
+		t.Fatalf("token = %q, err = %v, prompts = %+v; want manual verification", token, err, p)
 	}
 }
 
@@ -65,7 +124,8 @@ func TestVerificationURLEscapesTheToken(t *testing.T) {
 	}
 }
 
-// The retry sends the answer, not the challenge.
+// The retry sends the supplied token, which may be an externally verified
+// challenge token or a solution obtained through another verification method.
 func TestSolvedCarriesTheAnswer(t *testing.T) {
 	got := solved(hvDetails(), "  the-answer  ")
 

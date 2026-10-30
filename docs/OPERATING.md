@@ -85,23 +85,34 @@ alone.
 
 ## If Proton asks for human verification
 
-Proton sometimes wants proof that a person is present. carbonate prints a link,
-you open it, solve the challenge, and paste back the token it gives you:
+Proton sometimes wants proof that a person is present. For a CAPTCHA, carbonate
+prints a link. Open it and solve the puzzle. Once the page says verification is
+complete, return to the terminal and press Enter. There is no token to copy and
+the page does not email or display a code.
 
 ```
-Proton wants human verification (captcha). Open this, solve it, and paste the
-token it gives you:
-  https://verify.proton.me/?embed=false&methods=captcha&token=...
+Proton wants human verification (captcha). Open this link and complete the puzzle:
+  https://verify.proton.me/?methods=captcha&token=CHALLENGE_TOKEN
 
-Verification token:
+No verification code is needed.
+
+Press Enter once the page says verification is complete:
 ```
 
 The link is printed rather than opened, since carbonate often runs without a
-desktop. Unattended login reads the token as the next line of standard input,
-which only helps if you already had a browser.
+desktop. With `--password-stdin`, a newline confirms completion; end-of-file
+does not. The puzzle still needs to be solved in a browser before sending that
+confirmation. Other verification methods continue to ask for a token.
 
-The window has a **Verification token** field; leave it empty until the link
-appears below the form, then fill it in and log in again.
+The window still has a **Verification token** field. When it asks for a CAPTCHA,
+solve the puzzle, then paste the token printed by carbonate into that field and
+sign in again.
+
+The token is the same one in the link: Proton's standalone page submits the
+solved proof against it, and carbonate sends it when retrying sign-in. The
+`embed` parameter must be absent. Even `embed=false` selects embedded mode
+because Proton treats the value as a nonempty string, preventing the standalone
+proof submission.
 
 ## Two-password accounts
 

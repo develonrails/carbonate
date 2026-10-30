@@ -46,6 +46,14 @@ func (p terminalPrompter) Verify(message string) (string, error) {
 	return p.Line("Verification token: ")
 }
 
+// ConfirmCaptcha waits until the person has finished in the browser. Proton
+// marks the original challenge token as verified, so there is nothing to copy.
+func (p terminalPrompter) ConfirmCaptcha(message string) error {
+	fmt.Fprintf(os.Stderr, "\n%s\n\n", message)
+	_, err := p.Line("Press Enter once the page says verification is complete: ")
+	return err
+}
+
 // Line reads a visible line, such as a TOTP code.
 func (terminalPrompter) Line(prompt string) (string, error) {
 	fmt.Fprint(os.Stderr, prompt)

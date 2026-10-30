@@ -102,3 +102,21 @@ func TestStdinPrompterEmptyInput(t *testing.T) {
 		t.Fatal("reading from empty stdin succeeded")
 	}
 }
+
+func TestStdinCaptchaConfirmationPreservesNextAnswer(t *testing.T) {
+	p := newStdinPrompter(strings.NewReader("\n123456\n"))
+	if err := p.ConfirmCaptcha("Complete the CAPTCHA"); err != nil {
+		t.Fatal(err)
+	}
+	code, err := p.Line("Two-factor code: ")
+	if err != nil || code != "123456" {
+		t.Fatalf("code = %q, err = %v; confirmation consumed the next answer", code, err)
+	}
+}
+
+func TestStdinCaptchaEOFIsNotConfirmation(t *testing.T) {
+	p := newStdinPrompter(strings.NewReader(""))
+	if err := p.ConfirmCaptcha("Complete the CAPTCHA"); err == nil {
+		t.Fatal("EOF confirmed CAPTCHA completion")
+	}
+}
