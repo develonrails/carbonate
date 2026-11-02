@@ -220,6 +220,30 @@ func TestLoginReportsUnansweredVerification(t *testing.T) {
 	}
 }
 
+// A person who chose not to go on is not one who could not. A front end tells
+// them apart by the prompter's own error, so that has to survive the wrapping.
+func TestLoginKeepsWhyVerificationStopped(t *testing.T) {
+	verifyingServer(t)
+
+	cancelled := errors.New("cancelled")
+
+	_, err := Login(context.Background(), "someone", []byte("password"), &confirmingPrompter{err: cancelled})
+	if !errors.Is(err, cancelled) || !errors.Is(err, ErrVerificationNeeded) {
+		t.Errorf("error = %v, want both the verification and the reason it stopped", err)
+	}
+}
+
+// Carrying on before the page says it is done gets the same demand back. That
+// has to read as the answer not being taken, not as a fresh request.
+func TestLoginSaysWhenTheAnswerWasNotTaken(t *testing.T) {
+	verifyingServer(t)
+
+	_, err := Login(context.Background(), "someone", []byte("password"), &confirmingPrompter{})
+	if !errors.Is(err, ErrVerificationRefused) {
+		t.Errorf("error = %v, want it to say the verification was not accepted", err)
+	}
+}
+
 // With an answer in hand the login is attempted again, which is the only way
 // the retry can differ from the attempt that failed.
 //

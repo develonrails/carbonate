@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -59,23 +60,50 @@ func (b *bridge) hasSession() bool {
 	return err == nil
 }
 
-// guiPrompter answers the interactive parts of login from values the window
-// already collected, rather than from a terminal.
+// asker reaches the person while a login is under way, for what can only be
+// known once Proton has answered: a puzzle to solve, or a code to type. The
+// window implements it; the bridge only knows when to ask.
+//
+// Each method waits for the answer, so none may be called from GTK's thread.
+type asker interface {
+	// confirmCaptcha offers the page with Proton's puzzle and returns once
+	// the person says they have solved it.
+	confirmCaptcha(link string) error
+
+	// verificationToken offers the page for any other kind of challenge and
+	// returns the token the person brings back from it.
+	verificationToken(link string) (string, error)
+
+	// twoFactorCode asks for the code an authenticator app shows. stale says
+	// that one was typed earlier and has probably expired since.
+	twoFactorCode(stale bool) (string, error)
+}
+
+// The window answers a CAPTCHA by waiting, as the terminal does. Without this
+// it would be asked for a token there is no way to get.
+var (
+	_ proton.Prompter         = (*guiPrompter)(nil)
+	_ proton.CaptchaConfirmer = (*guiPrompter)(nil)
+)
+
+// guiPrompter answers the interactive parts of login, from what the window
+// already collected where it can and by asking where it cannot.
 //
 // Login only asks for a mailbox password on a two-password account, where the
 // key that unlocks your data is separate from the one that proves who you
 // are. Most accounts use one password for both.
 type guiPrompter struct {
-	mailbox      []byte
-	twoFactor    string
-	verification string
+	mailbox   []byte
+	twoFactor string
+	ask       asker
 
-	// onVerify is called with Proton's message when a challenge is needed,
-	// so the window can show the URL rather than swallow it.
-	onVerify func(message string)
+	// solvedPuzzle records that the person went off to a browser. A
+	// two-factor code typed before that has had time to expire: they last
+	// thirty seconds, and a CAPTCHA takes longer than that.
+	solvedPuzzle bool
 }
 
-func (p guiPrompter) Password(string) ([]byte, error) {
+func (p *guiPrompter) Password(string) ([]byte, error) {
 	if len(p.mailbox) == 0 {
 		return nil, errors.New("this account keeps its mailbox password separate; fill in the mailbox password field")
 	}
@@ -83,31 +111,50 @@ func (p guiPrompter) Password(string) ([]byte, error) {
 	return p.mailbox, nil
 }
 
-func (p guiPrompter) Line(string) (string, error) {
-	if p.twoFactor == "" {
-		return "", errors.New("this account needs a two-factor code")
+// Line is only ever asked for the two-factor code.
+func (p *guiPrompter) Line(string) (string, error) {
+	typed := p.twoFactor != ""
+
+	if typed && !p.solvedPuzzle {
+		return p.twoFactor, nil
 	}
 
-	return p.twoFactor, nil
+	return p.ask.twoFactorCode(typed)
 }
 
-// Verify hands back a token already in the window, and otherwise shows what
-// Proton is asking for so the person can fetch one.
-func (p guiPrompter) Verify(message string) (string, error) {
-	if p.verification == "" {
-		if p.onVerify != nil {
-			p.onVerify(message)
-		}
-
-		return "", errors.New("open the link above, solve the challenge, and paste the token into the verification field")
+// ConfirmCaptcha lets the login carry on with Proton's own challenge token
+// once the puzzle is solved, as the terminal does. There is nothing to paste:
+// the page marks that token as answered.
+func (p *guiPrompter) ConfirmCaptcha(message string) error {
+	if err := p.ask.confirmCaptcha(linkIn(message)); err != nil {
+		return err
 	}
 
-	return p.verification, nil
+	p.solvedPuzzle = true
+
+	return nil
+}
+
+// Verify is for challenges other than a CAPTCHA, which do hand back a token.
+func (p *guiPrompter) Verify(message string) (string, error) {
+	return p.ask.verificationToken(linkIn(message))
+}
+
+// linkIn finds the page a challenge is answered on. Proton's message is worded
+// for a terminal; the window wants the address on its own, behind a button.
+func linkIn(message string) string {
+	for _, field := range strings.Fields(message) {
+		if strings.HasPrefix(field, "https://") {
+			return field
+		}
+	}
+
+	return ""
 }
 
 // login signs in to Proton and stores the session, returning the bridge
 // password the user must give to their apps.
-func (b *bridge) login(ctx context.Context, username string, password []byte, twoFactor, mailboxPassword, verification string, onVerify func(string)) (string, error) {
+func (b *bridge) login(ctx context.Context, username string, password []byte, twoFactor, mailboxPassword string, ask asker) (string, error) {
 	if b.path == "" {
 		return "", errors.New("no configuration directory to store the session in")
 	}
@@ -119,11 +166,10 @@ func (b *bridge) login(ctx context.Context, username string, password []byte, tw
 		mailbox = password
 	}
 
-	sess, err := proton.Login(ctx, username, password, guiPrompter{
-		mailbox:      mailbox,
-		twoFactor:    twoFactor,
-		verification: verification,
-		onVerify:     onVerify,
+	sess, err := proton.Login(ctx, username, password, &guiPrompter{
+		mailbox:   mailbox,
+		twoFactor: twoFactor,
+		ask:       ask,
 	})
 	if err != nil {
 		return "", err

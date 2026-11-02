@@ -104,9 +104,12 @@ desktop. With `--password-stdin`, a newline confirms completion; end-of-file
 does not. The puzzle still needs to be solved in a browser before sending that
 confirmation. Other verification methods continue to ask for a token.
 
-The window still has a **Verification token** field. When it asks for a CAPTCHA,
-solve the puzzle, then paste the token printed by carbonate into that field and
-sign in again.
+The window does the same in a dialog: **Open the verification page** takes you
+to the puzzle, and **Continue** carries on with the sign-in once the page says
+verification is complete. Right-click the button to copy the link instead, for
+a browser somewhere else. If you typed a two-factor code before signing in,
+the window asks for a fresh one afterwards. Codes last thirty seconds, and the
+first one has usually expired by the time the puzzle is solved.
 
 The token is the same one in the link: Proton's standalone page submits the
 solved proof against it, and carbonate sends it when retrying sign-in. The

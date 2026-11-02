@@ -49,6 +49,11 @@ jobs:
       - name: Build the GUI
         run: CGO_ENABLED=1 go build -tags gtk ./cmd/carbonate-gui
 
+      # What the window does with a login needs GTK to compile but no display
+      # to run, so it is tested here rather than nowhere.
+      - name: Test the GUI
+        run: CGO_ENABLED=1 go test -tags gtk ./cmd/carbonate-gui
+
   # The Flatpak is how most people will actually install carbonate, so a
   # manifest that stopped building would be found by a user rather than here.
   #
