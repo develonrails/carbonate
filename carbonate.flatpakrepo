@@ -1,0 +1,8 @@
+[Flatpak Repo]
+Title=carbonate
+Url=https://develonrails.github.io/carbonate/repo/
+Homepage=https://github.com/develonrails/carbonate
+Comment=Proton Calendar and Contacts over CalDAV and CardDAV
+Description=Builds of carbonate from the current main.
+Icon=https://develonrails.github.io/carbonate/icon.svg
+GPGKey=mDMEaq0x9RYJKwYBBAHaRw8BAQdAYZ6e+2M+Jkbg8fp6hakMz7dZmaBIyFmAzDrD+Ou0l620P2NhcmJvbmF0ZSByZXBvc2l0b3J5IHNpZ25pbmcgPGNhcmJvbmF0ZUBkZXZlbG9ucmFpbHMuZ2l0aHViLmlvPoiTBBMWCgA7FiEEQWUH35m/oMXi17XofDzCxl8T4HwFAmqtMfUCGwMFCwkIBwICIgIGFQoJCAsCBBYCAwECHgcCF4AACgkQfDzCxl8T4Hwj7QEA+DGViNr1k8ktGq7EVM5I/rnPcDrl/7DL1vHSsmPTxssBANByXK7pi+487KyPNQuwYoRLcMYw2+rw5Ols+0peiWoK
