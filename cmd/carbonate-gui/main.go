@@ -661,14 +661,32 @@ func (u *ui) servePage(bridgePassword string, andStart bool) *adw.NavigationPage
 	// invented, and is the only one a calendar app ever sees.
 	details := adw.NewPreferencesGroup()
 	details.SetTitle("Set up your calendar app")
+
+	// The second paragraph is what GNOME Online Accounts gets wrong for
+	// people: it turns a bare address into https://, and then reports a
+	// missing WebDAV endpoint rather than a failed TLS handshake.
 	details.SetDescription(
-		"Your apps sign in to Carbonate, not to Proton. Give them the address below, your Proton " +
-			"address as the username, and the bridge password — which Carbonate made up. It is not " +
-			"your Proton password, and your Proton password will not work here.")
+		"Your apps sign in to Carbonate, not to Proton. Use the username, bridge password and " +
+			"addresses below. The username is your full Proton address, not only the part before " +
+			"the @. The bridge password is one Carbonate made up: your Proton password will not work here.\n\n" +
+			"Type the http:// yourself. GNOME turns a bare address into https://, which Carbonate " +
+			"does not speak, and then says it cannot find a WebDAV endpoint.")
 
 	u.bridgePassword = copyableRow(u, "Bridge password", bridgePassword)
 	u.calendarRow = copyableRow(u, "Calendar address", "")
 	u.contactsRow = copyableRow(u, "Contacts address", "")
+
+	// The addresses follow from where the bridge will listen, so they are
+	// known before it starts. Leaving them empty until then read as there
+	// being no address at all.
+	showAddresses := func() {
+		addr := address.Text()
+		u.calendarRow.SetSubtitle("http://" + addr + "/caldav/")
+		u.contactsRow.SetSubtitle("http://" + addr + "/carddav/")
+	}
+
+	showAddresses()
+	address.ConnectChanged(showAddresses)
 
 	details.Add(copyableRow(u, "Username", u.bridge.account()))
 	details.Add(u.bridgePassword)
@@ -743,8 +761,6 @@ func (u *ui) servePage(bridgePassword string, andStart bool) *adw.NavigationPage
 				toggle.RemoveCSSClass("suggested-action")
 				address.SetSensitive(false)
 				u.watch.SetSensitive(false)
-				u.calendarRow.SetSubtitle("http://" + addr + "/caldav/")
-				u.contactsRow.SetSubtitle("http://" + addr + "/carddav/")
 			})
 
 			u.say("Serving as %s.", u.bridge.account())

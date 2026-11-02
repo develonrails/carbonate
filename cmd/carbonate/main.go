@@ -179,7 +179,15 @@ use it as their password. Store it in your password manager now.
 
 Logging in again generates a new one, which every configured client would
 then reject. Pass -keep-bridge-password to keep this one.
-`, sess.Username, sessionPath, bridgePassword)
+
+Next, start serving: "carbonate serve", or Start in the Carbonate window. Your
+apps sign in with your full Proton email address and the bridge password, at
+
+  Calendar   http://%s/caldav/
+  Contacts   http://%s/carddav/
+
+unless serve is given a different -addr.
+`, sess.Username, sessionPath, bridgePassword, defaultAddr, defaultAddr)
 
 	return nil
 }
@@ -237,12 +245,16 @@ func bridgePasswordForAuth(keep bool) (string, bool, error) {
 	return string(buf), true, nil
 }
 
+// defaultAddr is where serve listens unless told otherwise, and so where auth
+// tells a person their apps will find it.
+const defaultAddr = "127.0.0.1:8080"
+
 // cmdServe starts the CalDAV and CardDAV endpoints and the Proton event-loop
 // poller that keeps the local cache in sync.
 func cmdServe(ctx context.Context, args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(out)
-	addr := fs.String("addr", "127.0.0.1:8080", "address to listen on (localhost only)")
+	addr := fs.String("addr", defaultAddr, "address to listen on (localhost only)")
 	path := fs.String("session", "", "path to the session file (default: user config dir)")
 	verbose := fs.Bool("log", false, "report every DAV request, and every change Proton sends")
 	watch := fs.Duration("watch", 0, "how often to ask Proton whether anything changed, without waiting for a client (0 to leave it to them)")
