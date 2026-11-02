@@ -13,6 +13,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -273,7 +274,7 @@ func (u *ui) unlockFromKeyring() {
 // cannot — silently forgetting would mean the next login is a surprise.
 func (u *ui) remember(bridgePassword string) {
 	if err := session.Remember(u.bridge.sessionPath(), bridgePassword); err != nil {
-		u.say("Could not save the bridge password for next time: %v", err)
+		u.fail("Could not save the bridge password for next time", err)
 	}
 }
 
@@ -291,14 +292,24 @@ func (u *ui) show() {
 	u.window.Present()
 }
 
-// say reports progress or failure, from any goroutine.
+// say reports progress, from any goroutine.
 //
 // A toast rather than a label: it is the thing that just happened, and it
 // should not sit on screen afterwards pretending to describe the present.
+// A toast is also one line, cut short where it runs out, so this is for what
+// fits on one. Anything that may not — an error, above all — goes to fail.
 func (u *ui) say(format string, args ...any) {
 	message := fmt.Sprintf(format, args...)
 
-	glib.IdleAdd(func() { u.toasts.AddToast(adw.NewToast(message)) })
+	glib.IdleAdd(func() {
+		toast := adw.NewToast(message)
+
+		// A toast reads its title as markup unless told otherwise, and an
+		// address or an error carrying an & would not show up at all.
+		toast.SetUseMarkup(false)
+
+		u.toasts.AddToast(toast)
+	})
 }
 
 // page wraps content in a navigable page with a header bar and the menu.
@@ -387,7 +398,7 @@ func (u *ui) showPreferences() {
 
 				switch {
 				case err != nil:
-					u.say("Could not ask to start at login: %v", err)
+					u.fail("Could not ask to start at login", err)
 				case !granted:
 					u.say("Your system did not allow starting at login.")
 				case want:
@@ -409,7 +420,7 @@ func (u *ui) showPreferences() {
 		u.prefs.RunInBackground = background.Active()
 
 		if err := u.prefs.save(); err != nil {
-			u.say("That setting will not survive a restart: %v", err)
+			u.fail("That setting will not survive a restart", err)
 		}
 	})
 
@@ -439,10 +450,12 @@ func primary(label string) *gtk.Button {
 
 // loginPage signs in to Proton for the first time.
 //
-// Only the two things everyone has are shown; a second factor, a separate
-// mailbox password and a human-verification token are folded away, because
-// most accounts have none of them and a form of five secrets reads as five
-// things you are expected to know.
+// Only the two things everyone has are shown; a second factor and a separate
+// mailbox password are folded away, because most accounts have neither and a
+// form of four secrets reads as four things you are expected to know.
+//
+// Human verification has no field at all. Whether Proton wants it is only
+// known once it has been asked, so the window asks then, in a dialog.
 func (u *ui) loginPage() *adw.NavigationPage {
 	prefs := adw.NewPreferencesPage()
 
@@ -463,7 +476,7 @@ func (u *ui) loginPage() *adw.NavigationPage {
 
 	more := adw.NewExpanderRow()
 	more.SetTitle("If your account needs more")
-	more.SetSubtitle("Two-factor code, separate mailbox password, verification")
+	more.SetSubtitle("Two-factor code, separate mailbox password")
 
 	twoFactor := adw.NewEntryRow()
 	twoFactor.SetTitle("Two-factor code")
@@ -471,12 +484,8 @@ func (u *ui) loginPage() *adw.NavigationPage {
 	mailbox := adw.NewPasswordEntryRow()
 	mailbox.SetTitle("Mailbox password, if separate")
 
-	verification := adw.NewEntryRow()
-	verification.SetTitle("Verification token, only if asked for")
-
 	more.AddRow(twoFactor)
 	more.AddRow(mailbox)
-	more.AddRow(verification)
 	extras.Add(more)
 
 	button := primary("Sign in")
@@ -491,7 +500,10 @@ func (u *ui) loginPage() *adw.NavigationPage {
 	prefs.Add(buttons)
 
 	button.ConnectClicked(func() {
+		// Read here, on GTK's thread: the login runs on another, and GTK is
+		// not to be touched from there.
 		user, pass := username.Text(), password.Text()
+		code, mailboxPassword := twoFactor.Text(), mailbox.Text()
 
 		if user == "" || pass == "" {
 			u.say("Fill in your Proton address and password.")
@@ -506,10 +518,15 @@ func (u *ui) loginPage() *adw.NavigationPage {
 			defer glib.IdleAdd(func() { button.SetSensitive(true) })
 
 			bridgePassword, err := u.bridge.login(context.Background(), user, []byte(pass),
-				twoFactor.Text(), mailbox.Text(), verification.Text(),
-				func(message string) { u.say("%s", message) })
-			if err != nil {
-				u.say("Sign-in failed: %v", err)
+				code, mailboxPassword, u)
+
+			switch {
+			case errors.Is(err, errCancelled):
+				u.say("Sign-in cancelled.")
+
+				return
+			case err != nil:
+				u.fail("Could not sign in", err)
 
 				return
 			}
@@ -574,7 +591,7 @@ func (u *ui) unlockPage() *adw.NavigationPage {
 			defer glib.IdleAdd(func() { unlock.SetSensitive(true) })
 
 			if err := u.bridge.unlock(context.Background(), entered); err != nil {
-				u.say("Could not unlock: %v", err)
+				u.fail("Could not unlock", err)
 
 				return
 			}
@@ -716,7 +733,7 @@ func (u *ui) servePage(bridgePassword string, andStart bool) *adw.NavigationPage
 			defer glib.IdleAdd(func() { toggle.SetSensitive(true) })
 
 			if err := u.bridge.start(addr, u.activity, every); err != nil {
-				u.say("Could not start: %v", err)
+				u.fail("Could not start", err)
 
 				return
 			}

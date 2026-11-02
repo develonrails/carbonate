@@ -365,16 +365,26 @@ func (c *Conn) RevokeSession(ctx context.Context, uid string) error {
 // verifyAndRetry asks a person to answer Proton's challenge and tries the
 // login again with their answer.
 func verifyAndRetry(ctx context.Context, m *api.Manager, username string, password []byte, details *api.APIHVDetails, p Prompter) (*api.Client, api.Auth, error) {
+	// Both are wrapped: a front end needs to tell a person who chose to stop
+	// from one who could not go on.
 	token, err := verificationToken(details, p)
 	if err != nil {
-		return nil, api.Auth{}, fmt.Errorf("%w: %v", ErrVerificationNeeded, err)
+		return nil, api.Auth{}, fmt.Errorf("%w: %w", ErrVerificationNeeded, err)
 	}
 
 	if strings.TrimSpace(token) == "" {
 		return nil, api.Auth{}, ErrVerificationNeeded
 	}
 
-	return m.NewClientWithLoginWithHVToken(ctx, username, password, solved(details, token))
+	c, auth, err := m.NewClientWithLoginWithHVToken(ctx, username, password, solved(details, token))
+
+	// The same demand again reads as Proton asking for the first time, when
+	// what happened is that it did not take the answer.
+	if humanVerification(err) != nil {
+		return nil, api.Auth{}, fmt.Errorf("%w (%v)", ErrVerificationRefused, err)
+	}
+
+	return c, auth, err
 }
 
 // ContactKeyRing unlocks everything a contact might be encrypted to: the

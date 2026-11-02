@@ -13,18 +13,26 @@ import (
 // before it will accept the login, and nothing supplied a solved token.
 var ErrVerificationNeeded = errors.New("Proton asked for human verification, which this way of logging in cannot answer")
 
+// ErrVerificationRefused means Proton asked again after the answer was sent.
+// Most often the puzzle was not finished before the login carried on.
+var ErrVerificationRefused = errors.New("Proton did not accept the verification; solve the puzzle until the page says verification is complete, then sign in again")
+
 // verifyBaseURL is where Proton hosts the challenge.
 const verifyBaseURL = "https://verify.proton.me/"
 
-// captchaConfirmer is optional: terminals can wait for confirmation and reuse
-// the challenge token, while front ends with a token field keep using Verify.
-type captchaConfirmer interface {
+// CaptchaConfirmer is optional for a Prompter: one that can wait for a person
+// to say they solved the puzzle lets the login reuse the challenge token, and
+// one that cannot is asked for a token through Verify instead.
+//
+// Exported so a front end can assert it implements this. The check is a type
+// assertion at run time, so a signature that drifts falls back without a word.
+type CaptchaConfirmer interface {
 	ConfirmCaptcha(message string) error
 }
 
 func verificationToken(details *api.APIHVDetails, p Prompter) (string, error) {
 	if len(details.Methods) == 1 && details.Methods[0] == "captcha" {
-		if confirmer, ok := p.(captchaConfirmer); ok {
+		if confirmer, ok := p.(CaptchaConfirmer); ok {
 			message := fmt.Sprintf("Proton wants human verification (captcha). Open this link and complete the puzzle:\n  %s\n\nNo verification code is needed.", verificationURL(details))
 			if err := confirmer.ConfirmCaptcha(message); err != nil {
 				return "", err
