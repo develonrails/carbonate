@@ -19,26 +19,33 @@ book together. **Settings → Online Accounts → Calendar, Contacts and Files**
 | Field | Value |
 |---|---|
 | Server Address | `http://127.0.0.1:8080/` |
-| Username | your Proton address |
+| Username | your full Proton address, `you@proton.me` |
 | Password | the bridge password |
 | Files | leave empty |
-| Calendar (CalDAV) | `http://127.0.0.1:8080/caldav/` |
-| Contacts (CardDAV) | `http://127.0.0.1:8080/carddav/` |
+| Calendar (CalDAV) | optional: `http://127.0.0.1:8080/caldav/` |
+| Contacts (CardDAV) | optional: `http://127.0.0.1:8080/carddav/` |
 
 Three of those matter more than they look.
+
+**The username is the whole address.** The part before the @ is what you may
+have typed to sign in to Proton, but the bridge only knows the account by its
+full address, and turns anything else away.
 
 **Type `http://` yourself.** The field takes a bare host, and what it makes of
 one is `https://`. carbonate speaks plain HTTP on the loopback interface, so
 the TLS handshake fails and the dialog reports `Cannot find WebDAV endpoint` —
 which reads like carbonate is not there at all.
 
-**Fill the two protocol fields.** carbonate serves the calendar and the address
-book under different paths, so there is no single address both can be
-discovered from.
-
 **Leave Files empty.** carbonate serves no files. GNOME Online Accounts still
 records `FilesEnabled=true`, which leaves GNOME Files trying to mount something
 that will never answer; turn Files off in the account once it is created.
+
+The two protocol fields can stay empty. Given only the server address, GNOME
+asks `/` for a principal, finds none, and carries on to `/.well-known/caldav`
+and `/.well-known/carddav`, which lead it to the calendars and the address
+book. Filling them in only skips that detour. That was measured against
+evolution-data-server 3.60, which does the finding for GNOME Online Accounts,
+and `TestServerAddressAloneFindsBoth` walks the same route.
 
 ### Cannot find WebDAV endpoint
 

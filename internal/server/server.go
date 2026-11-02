@@ -86,16 +86,7 @@ func Serve(ctx context.Context, conn *proton.Conn, opts Options) error {
 
 	go calendars.Watch(ctx, opts.Watch, activity)
 
-	mux := http.NewServeMux()
-	mux.Handle("/caldav/", calendars.Handler())
-	mux.Handle("/carddav/", addressBook.Handler())
-
-	// Clients given only a hostname find their way from here.
-	mux.Handle("/.well-known/caldav", calendars.Handler())
-	mux.Handle("/.well-known/carddav", addressBook.Handler())
-	mux.HandleFunc("/", Index)
-
-	guarded := Authenticated(username, password, Logged(mux, activity))
+	guarded := Authenticated(username, password, Logged(Routes(calendars.Handler(), addressBook.Handler()), activity))
 
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -140,6 +131,21 @@ has no dialog of its own — see docs/SETUP.md.
 
 		return err
 	}
+}
+
+// Routes is what the bridge serves behind its password: both protocols, and
+// the ways a client given less than their full address finds them.
+func Routes(calendars, addressBook http.Handler) http.Handler {
+	mux := http.NewServeMux()
+	mux.Handle("/caldav/", calendars)
+	mux.Handle("/carddav/", addressBook)
+
+	// Clients given only a hostname find their way from here.
+	mux.Handle("/.well-known/caldav", calendars)
+	mux.Handle("/.well-known/carddav", addressBook)
+	mux.HandleFunc("/", Index)
+
+	return mux
 }
 
 // announce opens the log by saying what will and will not appear in it.
