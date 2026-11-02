@@ -65,11 +65,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # No cache-key here. The action appends -x86_64 to whatever it is given
+      # and, on a miss, falls back to the prefix flatpak-builder-x86_64-, so a
+      # key naming the commit could never match an earlier run: every build
+      # started cold and fetched all 67 module zips over again. The default
+      # key, flatpak-builder-<arch>-<manifest hash>, does start with that
+      # prefix, so a changed manifest falls back to the last build instead.
       - uses: flathub-infra/flatpak-github-actions/flatpak-builder@master
         with:
           bundle: carbonate.flatpak
           manifest-path: build/flatpak/io.github.develonrails.Carbonate.yml
-          cache-key: flatpak-builder-${{ github.sha }}
 
       # flatpak-builder exports into an OSTree repo on its way to the bundle,
       # and that repo is what people actually install from. Keeping it means
