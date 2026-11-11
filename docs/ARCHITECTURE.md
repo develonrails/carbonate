@@ -241,6 +241,29 @@ Already vCards. Each contact is a set of cards, one per protection level:
 Read: decrypt each card with the address key, merge properties into one vCard.
 Write: split properties back across the buckets, sign, encrypt.
 
+**Which field goes in which card is not ours to choose.** The signed card
+holds `version`, `prodid`, `fn`, `uid`, `email` — and `key`, `x-pm-mimetype`,
+`x-pm-encrypt`, `x-pm-encrypt-untrusted`, `x-pm-sign`, `x-pm-scheme`,
+`x-pm-tls`, the pinned keys and per-address encryption settings. Proton reads
+those from the signed card and from nowhere else:
+`getPublicKeysVcardHelper.ts` says so outright — *"all the info we need is in
+the signed part"* — and returns no pinned keys at all if the card does not
+have them.
+
+So moving one into the encrypted card is not a slower route to the same
+place. The value survives, because reading merges every card, but Proton
+stops acting on it: the pinned key goes unused and forced encryption to an
+external address turns itself off. Nothing reports this. carbonate used to do
+it on every write of a contact it had just read back perfectly, which is the
+worst shape a bug can have — correct from this side, silently degraded on the
+other.
+
+`categories` is the one field that must travel in the clear. Contact group
+membership is the server's to maintain, so it cannot be encrypted: a
+cleartext card is added when, and only when, the contact names categories,
+and the create carries `Labels: 1` to tell the server to act on them. Without
+either, a contact written with groups joins none.
+
 ### Calendar events
 
 Each calendar has its own key, whose passphrase is encrypted to an address key.
@@ -440,11 +463,21 @@ This is the table I expected to have to derive by experiment:
 
 | Part | Card | Properties |
 |---|---|---|
-| Shared | signed | `uid` `dtstamp` `dtstart` `dtend` `recurrence-id` `rrule` `exdate` `organizer` `sequence` |
-| Shared | encrypted + signed | `uid` `dtstamp` `created` `description` `summary` `location` |
+| Shared | signed | `uid` `dtstamp` `dtstart` `dtend` `recurrence-id` `rrule` `exdate` `organizer` `sequence` `x-pm-conference-id` |
+| Shared | encrypted + signed | `uid` `dtstamp` `created` `description` `summary` `location` `x-pm-conference-url` |
 | Calendar | signed | `uid` `dtstamp` `exdate` `status` `transp` |
 | Calendar | encrypted + signed | `uid` `dtstamp` `comment` |
 | Attendees | encrypted + signed | `uid` `dtstamp` `attendee` |
+
+**The shared part is sent whole even when it is empty.** Proton's web client
+renders both shared cards unconditionally and drops only the calendar and
+attendee cards when they hold nothing — `toResult` against
+`toResultOptimized` in `veventHelper.ts`. That difference is not cosmetic.
+A bare invitation has nothing to put in the shared encrypted card, and
+dropping it took the shared key packet with it; the guest list is encrypted
+under exactly that key, so the event went to Proton with an attendee card
+that nothing — the web app, another client, or carbonate on its own next
+read — could ever open again.
 
 ### Recurring events and their exceptions
 
@@ -481,8 +514,19 @@ Two rules that are not obvious from the table:
 VALARM does not go into an ICS part at all. Alarms travel as a separate
 `Notifications` field on the event, beside the encrypted cards, as
 `{Type, Trigger}` — where `Type` is 0 for email and 1 for the device, and
-`Trigger` is the iCalendar value verbatim, such as `-PT15M`. Proton knows only
-those two kinds, so an AUDIO alarm becomes a device notification.
+`Trigger` is an offset from the event's start, such as `-PT15M`. Proton knows
+only those two kinds, so an AUDIO alarm becomes a device notification.
+
+**An offset is the only thing `Trigger` can hold.** RFC 5545 also allows an
+alarm set for a fixed moment, and a client that sends one used to have it
+stored verbatim — a reminder Proton's own apps cannot read. It is converted
+against `DTSTART` first, to whole minutes, the way the web app converts it
+(`absoluteToRelativeTrigger`). Whole weeks are written as days: Proton's
+conversion emits a week and a day component together, which RFC 5545 does not
+allow in one duration, and the offset is the same either way. An alarm whose
+moment cannot be placed — an unparseable value, a `DTSTART` in a time zone
+this machine does not have — is dropped, because a reminder at the wrong time
+is worse than one the user can see is missing.
 
 `Notifications` is **always sent, never omitted**. Leaving it out of an update
 keeps whatever was there before, so removing the last reminder would appear to
@@ -506,10 +550,33 @@ An attendee appears in two places at once:
 - **`Attendees`** — a clear list of `{Token, Status}`. Proton tracks replies
   without ever learning who was invited.
 
-The token is `SHA1(uid + normalisedEmail)`, hex-encoded, and is written back
-into the event as an `X-PM-TOKEN` parameter. Both ends derive it from the same
-inputs, so it has to match exactly: strip `mailto:` and lowercase. SHA-1 is
-Proton's choice of identifier, not a security decision.
+The token is `SHA1(uid + canonicalEmail)`, hex-encoded, and is written back
+into the event as an `X-PM-TOKEN` parameter. SHA-1 is Proton's choice of
+identifier, not a security decision.
+
+Both ends derive it from the same inputs, so the canonical form has to match
+exactly, and lowercasing is not it. On Proton's own domains — `proton.me`,
+`pm.me`, `protonmail.com`, `protonmail.ch` — a `+alias` goes, and so does
+every dot, underscore and hyphen in the local part. On Google's, the alias
+and the dots go. Everywhere else it is a plain lowercase. This is
+`canonicalizeEmailByGuess` from the web client, guessing included: only
+Proton's servers know which custom domains are theirs, and the web app asks
+them. carbonate cannot, so a custom Proton domain is folded the default way
+— which is what the web app does when it cannot ask either.
+
+**A token already on the attendee is kept, never recomputed.** It is the only
+name Proton has for that guest, the one it files their replies under, and the
+address it was made from is not always recoverable from the address a client
+writes down. The web client keeps an existing one for the same reason
+(`getAttendeeHasToken`).
+
+On the way back, the reply statuses are written onto the attendees before the
+event is served. Proton records a reply in the clear `Attendees` list and
+nowhere near the encrypted card, whose `PARTSTAT` stays at whatever the guest
+was invited with. Reading the clear list only to count it meant a client was
+shown an invitation nobody had answered — and sent that stale answer back on
+the next edit, which Proton then filed as the guest's reply. Every answer to
+a recurring meeting would be undone by the next change to it.
 
 Status maps onto the same integers as iCalendar's PARTSTAT:
 
@@ -634,3 +701,20 @@ set out to solve, and all three are done. What remains:
 3. **Signature verification.** protoxide leaves two upstream cryptographic
    checks disabled, so some old or imported events are served with an
    unverified signature. Understand why before copying that decision.
+
+   There is a second half to this. carbonate verifies against our own address
+   keyring, so anything written by another member of a shared calendar is
+   flagged unverified for want of a key rather than for any fault — on a
+   shared calendar that is most of it. Proton verifies against the public
+   keys of the card's `Author`, which it looks up. Doing the same would turn
+   the flag from "not ours" into something that means what it says.
+
+4. **We sign as text where Proton signs binary.** `signPart` in the web
+   client signs `binaryData`; gopenpgp's `NewPlainMessageFromString` makes a
+   text-mode signature. Proton accepts ours, but through
+   `getNeedsLegacyVerification` — a path it labels legacy and keeps for old
+   clients. It works today and is not ours to rely on forever.
+
+5. **Cancelled occurrences.** Proton has a `CancelledOccurrenceContent` part
+   for an occurrence of a series that has been called off. carbonate neither
+   writes nor reads it.

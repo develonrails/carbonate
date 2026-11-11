@@ -204,3 +204,133 @@ func TestSplitDoesNotMutateInput(t *testing.T) {
 		}
 	}
 }
+
+// A pinned key and the per-address encryption settings must land in the
+// signed card.
+//
+// Proton reads them from there and nowhere else, so an encrypted one is not
+// a slower path to the same place — it is the settings silently ceasing to
+// apply. carbonate merges every card on read, so these fields come back from
+// Proton looking perfectly intact and are handed to the client, which means
+// a misplaced write looks correct from this side and is only visible as mail
+// that stops being encrypted.
+func TestKeyAndEncryptionSettingsAreSigned(t *testing.T) {
+	kr := testKeyRing(t)
+
+	card := testCard()
+	card[vcard.FieldEmail][0].Group = "item1"
+
+	for name, value := range map[string]string{
+		vcard.FieldKey:              "data:application/pgp-keys;base64,AAAA",
+		api.FieldPMEncrypt:          "true",
+		api.FieldPMEncryptUntrusted: "true",
+		api.FieldPMSign:             "true",
+		api.FieldPMScheme:           "pgp-mime",
+		api.FieldPMMIMEType:         "text/plain",
+		fieldPMTLS:                  "true",
+	} {
+		card.Add(name, &vcard.Field{Value: value, Group: "item1"})
+	}
+
+	cards, err := split(kr, card)
+	if err != nil {
+		t.Fatalf("split: %v", err)
+	}
+
+	signed, ok := cards.Get(api.CardTypeSigned)
+	if !ok {
+		t.Fatal("no signed card was produced")
+	}
+
+	for _, name := range []string{
+		vcard.FieldKey,
+		api.FieldPMEncrypt,
+		api.FieldPMEncryptUntrusted,
+		api.FieldPMSign,
+		api.FieldPMScheme,
+		api.FieldPMMIMEType,
+		fieldPMTLS,
+	} {
+		if !strings.Contains(signed.Data, name) {
+			t.Errorf("%s is not in the signed card, so Proton will not act on it:\n%s", name, signed.Data)
+		}
+	}
+
+	// The group is what ties them to the address, so it has to survive too.
+	if !strings.Contains(signed.Data, "item1.EMAIL") {
+		t.Errorf("the address lost its group, leaving its settings attached to nothing:\n%s", signed.Data)
+	}
+}
+
+// Categories go in a cleartext card, because the server files the contact
+// under those groups and cannot read an encrypted one.
+func TestCategoriesGoInAClearCard(t *testing.T) {
+	kr := testKeyRing(t)
+
+	card := testCard()
+	card.AddValue(vcard.FieldCategories, "Work")
+
+	cards, err := split(kr, card)
+	if err != nil {
+		t.Fatalf("split: %v", err)
+	}
+
+	clear, ok := cards.Get(api.CardTypeClear)
+	if !ok {
+		t.Fatal("a contact with categories produced no cleartext card")
+	}
+
+	if !strings.Contains(clear.Data, "CATEGORIES:Work") {
+		t.Errorf("the cleartext card does not carry the categories:\n%s", clear.Data)
+	}
+
+	if clear.Signature != "" {
+		t.Error("the cleartext card was signed; Proton sends no signature with one")
+	}
+
+	// And nowhere else, or the merged contact would list the group twice.
+	encrypted, ok := cards.Get(api.CardTypeEncrypted | api.CardTypeSigned)
+	if ok && strings.Contains(encrypted.Data, "CATEGORIES") {
+		t.Error("categories were left in the encrypted card as well")
+	}
+
+	merged, err := cards.Merge(kr)
+	if err != nil {
+		t.Fatalf("Merge: %v", err)
+	}
+
+	if got := merged[vcard.FieldCategories]; len(got) != 1 {
+		t.Errorf("round trip produced %d CATEGORIES, want 1", len(got))
+	}
+}
+
+// A contact without categories gets no cleartext card at all: Proton makes
+// one for categories and for nothing else, and an empty one would publish
+// PRODID for no reason.
+func TestNoCategoriesMeansNoClearCard(t *testing.T) {
+	kr := testKeyRing(t)
+
+	cards, err := split(kr, testCard())
+	if err != nil {
+		t.Fatalf("split: %v", err)
+	}
+
+	if _, ok := cards.Get(api.CardTypeClear); ok {
+		t.Error("a contact with no categories still produced a cleartext card")
+	}
+}
+
+// The Labels flag is what makes the server act on the categories. Without it
+// the cleartext card is sent and ignored, which looks like success.
+func TestLabelsFollowCategories(t *testing.T) {
+	if got := labelsFor(testCard()); got != labelsIgnore {
+		t.Errorf("labelsFor without categories = %d, want %d", got, labelsIgnore)
+	}
+
+	card := testCard()
+	card.AddValue(vcard.FieldCategories, "Work")
+
+	if got := labelsFor(card); got != labelsInclude {
+		t.Errorf("labelsFor with categories = %d, want %d", got, labelsInclude)
+	}
+}

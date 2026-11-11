@@ -104,6 +104,95 @@ func name(line string) string {
 	return strings.ToUpper(line)
 }
 
+// splitLine divides an iCalendar content line into its property name, its
+// parameters and its value.
+//
+// name() can get away with IndexAny because a property name holds neither
+// character. Reaching past the name cannot: a parameter value may be quoted,
+// and a quoted one may contain ";" and ":" freely (RFC 5545 §3.1). A
+// delimiter search that ignores the quotes cuts such a line in the wrong
+// place.
+func splitLine(line string) (string, []string, string) {
+	var parts []string
+
+	quoted, start := false, 0
+
+	for i := 0; i < len(line); i++ {
+		switch line[i] {
+		case '"':
+			quoted = !quoted
+		case ';':
+			if !quoted {
+				parts = append(parts, line[start:i])
+				start = i + 1
+			}
+		case ':':
+			if !quoted {
+				parts = append(parts, line[start:i])
+
+				return parts[0], parts[1:], line[i+1:]
+			}
+		}
+	}
+
+	parts = append(parts, line[start:])
+
+	return parts[0], parts[1:], ""
+}
+
+// param returns the value of a parameter, without the quotes if it had any.
+func param(params []string, key string) string {
+	for _, p := range params {
+		eq := strings.Index(p, "=")
+		if eq < 0 {
+			continue
+		}
+
+		if !strings.EqualFold(strings.TrimSpace(p[:eq]), key) {
+			continue
+		}
+
+		return strings.Trim(strings.TrimSpace(p[eq+1:]), `"`)
+	}
+
+	return ""
+}
+
+// withParam returns the line with the named parameter set, replacing one
+// already there rather than adding a second.
+func withParam(line, key, value string) string {
+	prop, params, body := splitLine(line)
+
+	set := false
+
+	for i, p := range params {
+		eq := strings.Index(p, "=")
+		if eq < 0 || !strings.EqualFold(strings.TrimSpace(p[:eq]), key) {
+			continue
+		}
+
+		params[i] = key + "=" + value
+		set = true
+	}
+
+	if !set {
+		params = append(params, key+"="+value)
+	}
+
+	return prop + joinParams(params) + ":" + body
+}
+
+func joinParams(params []string) string {
+	var out strings.Builder
+
+	for _, p := range params {
+		out.WriteString(";")
+		out.WriteString(p)
+	}
+
+	return out.String()
+}
+
 // ICS reassembles the parts into a single valid iCalendar object.
 //
 // Every part arrives as its own complete VCALENDAR wrapping a fragment of the
@@ -428,7 +517,67 @@ func decode(raw rawEvent, calKR, addrKR *crypto.KeyRing) (Event, error) {
 		}
 	}
 
+	event.Properties = applyReplies(event.Properties, raw.Attendees)
+
 	return event, nil
+}
+
+// applyReplies writes the reply statuses onto the attendee properties.
+//
+// Proton keeps the guest list encrypted but tracks replies in the clear,
+// beside the event, as {Token, Status}. The PARTSTAT inside the encrypted
+// card is only ever what was written when the guest was invited: a reply
+// changes the clear list and nothing else.
+//
+// So this is not a nicety. Without it a client never learns that anyone
+// answered — and, worse, writes the stale PARTSTAT back on the next edit,
+// which is what Proton then files as the guest's reply. The answers would be
+// quietly undone by the next change to the event.
+func applyReplies(properties []string, attendees []api.CalendarAttendee) []string {
+	if len(attendees) == 0 {
+		return properties
+	}
+
+	replies := make(map[string]string, len(attendees))
+
+	for _, a := range attendees {
+		if a.Token == "" {
+			continue
+		}
+
+		replies[strings.ToLower(a.Token)] = partstatName(int(a.Status))
+	}
+
+	for i, line := range properties {
+		if name(line) != "ATTENDEE" {
+			continue
+		}
+
+		_, params, _ := splitLine(line)
+
+		reply, ok := replies[strings.ToLower(param(params, "X-PM-TOKEN"))]
+		if !ok {
+			continue
+		}
+
+		properties[i] = withParam(line, "PARTSTAT", reply)
+	}
+
+	return properties
+}
+
+// partstatName renders a Proton reply status as iCalendar names it.
+func partstatName(status int) string {
+	switch status {
+	case statusAccepted:
+		return "ACCEPTED"
+	case statusDeclined:
+		return "DECLINED"
+	case statusTentative:
+		return "TENTATIVE"
+	default:
+		return "NEEDS-ACTION"
+	}
 }
 
 // decodePart decrypts a part and judges its signature separately, returning

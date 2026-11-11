@@ -21,19 +21,80 @@ import (
 	"github.com/develonrails/carbonate/internal/proton"
 )
 
+// fieldPMTLS has no constant in go-proton-api, unlike the other X-PM-* fields.
+const fieldPMTLS = "X-PM-TLS"
+
 // signedFields stay in the signed, unencrypted card.
 //
 // Proton needs to read them: it addresses mail by EMAIL, shows FN in its own
 // UI, and hangs per-address encryption preferences off the email's group.
 // Everything else — phone numbers, addresses, notes, birthdays — is encrypted.
 //
-// Taken from hydroxide by way of protoxide (MIT).
+// This is SIGNED_FIELDS from Proton's web client
+// (packages/shared/lib/contacts/constants.ts), and the list has to match it
+// exactly rather than merely overlap. Proton reads a contact's pinned keys
+// and per-address encryption settings from the signed card and from nowhere
+// else — getPublicKeysVcardHelper.ts says so in as many words, "all the info
+// we need is in the signed part", and gives up with no pinned keys if the
+// field is not there. A key or an X-PM-* setting moved into the encrypted
+// card is therefore not merely relocated: Proton stops honouring it, so a
+// pinned key goes unused and forced encryption to an external address
+// quietly turns itself off. Nothing reports this, and carbonate would cause
+// it on every write of a contact it had read back correctly.
 var signedFields = []string{
 	vcard.FieldVersion,
 	vcard.FieldProductID,
 	vcard.FieldFormattedName,
 	vcard.FieldUID,
 	vcard.FieldEmail,
+
+	vcard.FieldKey,
+	api.FieldPMMIMEType,
+	api.FieldPMEncrypt,
+	api.FieldPMEncryptUntrusted,
+	api.FieldPMSign,
+	api.FieldPMScheme,
+	fieldPMTLS,
+}
+
+// clearFields go in a cleartext card, which a contact has only when it names
+// categories.
+//
+// CATEGORIES is how contact group membership is stored, and the server is
+// what maintains it — so unlike everything else outside the signed card, it
+// cannot be encrypted. Proton's web client builds a cleartext card for
+// exactly this case and for no other (CLEAR_FIELDS in contacts/constants.ts),
+// and VERSION and PRODID ride along so the card stands on its own.
+var clearFields = []string{
+	vcard.FieldVersion,
+	vcard.FieldProductID,
+	vcard.FieldCategories,
+}
+
+// How Proton numbers the two flags on a create.
+//
+// Overwrite settles what happens when the UID is already taken: carbonate
+// takes the contact over, because a CardDAV PUT is the client saying this is
+// now the contact at that address. The web app refuses instead, which is the
+// right answer for an import and the wrong one here.
+//
+// Labels settles whether the server reads CATEGORIES out of the cleartext
+// card and files the contact under those groups. Left at ignore, a contact
+// written with categories joins no group at all.
+const (
+	overwriteContact = 1
+
+	labelsIgnore  = 0
+	labelsInclude = 1
+)
+
+// labelsFor reports whether Proton should act on the contact's categories.
+func labelsFor(card vcard.Card) int {
+	if len(card[vcard.FieldCategories]) == 0 {
+		return labelsIgnore
+	}
+
+	return labelsInclude
 }
 
 // Contact is a decrypted Proton contact.
@@ -185,7 +246,8 @@ func Put(ctx context.Context, conn *proton.Conn, card vcard.Card) (id string, cr
 
 	res, err := conn.Client.CreateContacts(ctx, api.CreateContactsReq{
 		Contacts:  []api.ContactCards{{Cards: cards}},
-		Overwrite: 1,
+		Overwrite: overwriteContact,
+		Labels:    labelsFor(card),
 	})
 	if err != nil {
 		return "", false, fmt.Errorf("creating contact: %w", err)
@@ -241,6 +303,24 @@ func split(kr *crypto.KeyRing, card vcard.Card) (api.Cards, error) {
 	signed := make(vcard.Card)
 	encrypted := card
 
+	// Before the signed pass, so that PRODID is still here to be copied.
+	var clear vcard.Card
+
+	if len(encrypted[vcard.FieldCategories]) > 0 {
+		clear = make(vcard.Card)
+
+		for _, name := range clearFields {
+			if fields, ok := encrypted[name]; ok {
+				clear[name] = fields
+			}
+		}
+
+		// VERSION and PRODID are signed as well, and the pass below takes
+		// them out of the encrypted card. CATEGORIES is in the clear card
+		// alone, so it has to be removed here.
+		delete(encrypted, vcard.FieldCategories)
+	}
+
 	for _, name := range signedFields {
 		fields, ok := encrypted[name]
 		if !ok {
@@ -256,6 +336,15 @@ func split(kr *crypto.KeyRing, card vcard.Card) (api.Cards, error) {
 	}
 
 	var cards api.Cards
+
+	if len(clear) > 0 {
+		card, err := encode(kr, clear, api.CardTypeClear)
+		if err != nil {
+			return nil, err
+		}
+
+		cards = append(cards, card)
+	}
 
 	if len(signed) > 0 {
 		card, err := encode(kr, signed, api.CardTypeSigned)
