@@ -32,8 +32,8 @@ const (
 //
 // Taken from protoxide (MIT), which derived it from Proton's web client.
 var (
-	sharedSigned    = []string{"UID", "DTSTAMP", "DTSTART", "DTEND", "RECURRENCE-ID", "RRULE", "EXDATE", "ORGANIZER", "SEQUENCE"}
-	sharedEncrypted = []string{"UID", "DTSTAMP", "CREATED", "DESCRIPTION", "SUMMARY", "LOCATION"}
+	sharedSigned    = []string{"UID", "DTSTAMP", "DTSTART", "DTEND", "RECURRENCE-ID", "RRULE", "EXDATE", "ORGANIZER", "SEQUENCE", "X-PM-CONFERENCE-ID"}
+	sharedEncrypted = []string{"UID", "DTSTAMP", "CREATED", "DESCRIPTION", "SUMMARY", "LOCATION", "X-PM-CONFERENCE-URL"}
 
 	calendarSigned    = []string{"UID", "DTSTAMP", "EXDATE", "STATUS", "TRANSP"}
 	calendarEncrypted = []string{"UID", "DTSTAMP", "COMMENT"}
@@ -409,6 +409,7 @@ func buildEvent(ctx context.Context, event *ical.Event, keys *proton.CalendarKey
 	}
 
 	ensureOrganizer(event, keys.Email)
+	ensureStamp(event)
 
 	data := &eventData{Permissions: 1, IsOrganizer: 1}
 
@@ -427,7 +428,18 @@ func buildEvent(ctx context.Context, event *ical.Event, keys *proton.CalendarKey
 		sharedPacket, calendarPacket = existing.SharedKeyPacket, existing.CalendarKeyPacket
 	}
 
-	shared, err := buildCards(event, sharedSigned, append(sharedEncrypted, extra...), keys, sharedPacket)
+	// The shared part is mandatory, the calendar part is not. Proton's web
+	// client renders both shared cards unconditionally and drops only the
+	// calendar and attendee cards when they hold nothing (toResult against
+	// toResultOptimized in veventHelper.ts).
+	//
+	// The difference is not cosmetic. An event with no summary, description,
+	// location or unrecognised property has nothing to put in the shared
+	// encrypted card, and dropping it would leave the event with no shared
+	// key packet at all — whereupon the attendee part below would encrypt
+	// the guest list under a session key nobody is ever handed, and nothing
+	// could read it again.
+	shared, err := buildCards(event, sharedSigned, append(sharedEncrypted, extra...), keys, sharedPacket, true)
 	if err != nil {
 		return nil, err
 	}
@@ -435,7 +447,7 @@ func buildEvent(ctx context.Context, event *ical.Event, keys *proton.CalendarKey
 	data.SharedEventContent = shared.cards
 	data.SharedKeyPacket = shared.keyPacket
 
-	calendar, err := buildCards(event, calendarSigned, calendarEncrypted, keys, calendarPacket)
+	calendar, err := buildCards(event, calendarSigned, calendarEncrypted, keys, calendarPacket, false)
 	if err != nil {
 		return nil, err
 	}
@@ -656,10 +668,18 @@ func buildAttendees(event *ical.Event, keys *proton.CalendarKeys, newPacket, old
 	for i := range fields {
 		field := &fields[i]
 
-		token := attendeeToken(uid, field.Value)
-
 		if field.Params == nil {
 			field.Params = ical.Params{}
+		}
+
+		// A token that is already there is kept rather than recomputed, the
+		// way Proton's web client keeps one (getAttendeeHasToken). It is the
+		// name Proton files this guest's replies under, and deriving a fresh
+		// one would orphan them: the address a token was made from is not
+		// always recoverable from the address a client writes down.
+		token := strings.TrimSpace(field.Params.Get("X-PM-TOKEN"))
+		if token == "" {
+			token = attendeeToken(uid, field.Value)
 		}
 
 		field.Params.Set("X-PM-TOKEN", token)
@@ -668,7 +688,7 @@ func buildAttendees(event *ical.Event, keys *proton.CalendarKeys, newPacket, old
 		out.guests = append(out.guests, guest{address: normaliseAddress(field.Value), token: token})
 	}
 
-	body := pick(event, attendeeEncrypted)
+	body := pick(event, attendeeEncrypted, false)
 	if body == "" {
 		return attendeeParts{}, nil
 	}
@@ -748,15 +768,99 @@ func ensureOrganizer(event *ical.Event, email string) {
 // SHA-1 is not a security choice here — Proton uses it as an identifier, and
 // both ends must agree — so it is used deliberately rather than by oversight.
 func attendeeToken(uid, address string) string {
-	sum := sha1.Sum([]byte(uid + normaliseAddress(address)))
+	sum := sha1.Sum([]byte(uid + canonicalAddress(address)))
 
 	return hex.EncodeToString(sum[:])
 }
 
 // normaliseAddress strips the mailto: scheme and lowercases, so the same
 // person yields the same token however a client wrote them down.
+//
+// Lowercasing comes first because a URI scheme is case-insensitive and
+// clients do write MAILTO:. Trimming before lowercasing left the scheme on
+// the address, which then travelled into the token and into the list of
+// addresses Proton is asked for keys.
 func normaliseAddress(address string) string {
-	return strings.ToLower(strings.TrimPrefix(strings.TrimSpace(address), "mailto:"))
+	return strings.TrimPrefix(strings.ToLower(strings.TrimSpace(address)), "mailto:")
+}
+
+// Domains whose addresses Proton folds further than lowercasing before
+// hashing them into a token.
+var (
+	protonDomains = map[string]bool{
+		"protonmail.com": true,
+		"protonmail.ch":  true,
+		"pm.me":          true,
+		"proton.me":      true,
+	}
+
+	gmailDomains = map[string]bool{
+		"gmail.com":      true,
+		"googlemail.com": true,
+		"google.com":     true,
+	}
+)
+
+// canonicalAddress folds an address the way Proton does before it becomes a
+// token.
+//
+// Plain lowercasing is not enough: on its own domains Proton also drops a
+// "+alias" and every dot, underscore and hyphen from the local part, and on
+// Google's it drops the alias and the dots. Two clients writing the same
+// person differently must still reach the same token, because the token is
+// the only name Proton has for a guest — it tracks replies by it without
+// ever learning the address.
+//
+// This mirrors canonicalizeEmailByGuess from Proton's web client, including
+// the guessing. Only Proton's servers know which custom domains belong to
+// Proton, and the web app asks them; carbonate does not, so an address on a
+// custom Proton domain is folded the default way, exactly as the web app
+// does when it cannot ask either.
+func canonicalAddress(address string) string {
+	address = normaliseAddress(address)
+
+	at := strings.LastIndex(address, "@")
+	if at < 0 {
+		return address
+	}
+
+	local, domain := address[:at], address[at+1:]
+
+	switch {
+	case protonDomains[domain]:
+		local = strings.NewReplacer(".", "", "_", "", "-", "").Replace(withoutAlias(local))
+	case gmailDomains[domain]:
+		local = strings.ReplaceAll(withoutAlias(local), ".", "")
+	default:
+		return address
+	}
+
+	return local + "@" + domain
+}
+
+// withoutAlias drops a "+alias" suffix from an address's local part.
+func withoutAlias(local string) string {
+	if i := strings.Index(local, "+"); i >= 0 {
+		return local[:i]
+	}
+
+	return local
+}
+
+// ensureStamp gives the event a DTSTAMP if the client sent none.
+//
+// RFC 5545 requires one, and Proton puts it in every card as the thing that
+// makes a card readable on its own (withDtstamp in veventHelper.ts). A
+// mandatory card built from an event without one would carry a bare UID.
+func ensureStamp(event *ical.Event) {
+	if p := event.Props.Get("DTSTAMP"); p != nil && strings.TrimSpace(p.Value) != "" {
+		return
+	}
+
+	event.Props.Set(&ical.Prop{
+		Name:  "DTSTAMP",
+		Value: time.Now().UTC().Format("20060102T150405Z"),
+	})
 }
 
 // partstat maps an iCalendar reply state onto Proton's.
@@ -787,10 +891,13 @@ type cardSet struct {
 // existingKeyPacket, when present, is reused rather than replaced: re-keying
 // an event on every edit would needlessly churn the copy every attendee holds.
 // A fresh key packet is only sent when there is none to reuse.
-func buildCards(event *ical.Event, signedProps, encryptedProps []string, keys *proton.CalendarKeys, existingKeyPacket string) (cardSet, error) {
+//
+// mandatory renders a card even when it would hold nothing beyond UID and
+// DTSTAMP, which is what Proton does for the shared part.
+func buildCards(event *ical.Event, signedProps, encryptedProps []string, keys *proton.CalendarKeys, existingKeyPacket string, mandatory bool) (cardSet, error) {
 	var out cardSet
 
-	if body := pick(event, signedProps); body != "" {
+	if body := pick(event, signedProps, mandatory); body != "" {
 		signature, err := sign(keys.AddrKR, body)
 		if err != nil {
 			return cardSet{}, err
@@ -799,7 +906,7 @@ func buildCards(event *ical.Event, signedProps, encryptedProps []string, keys *p
 		out.cards = append(out.cards, card{Type: cardSigned, Data: body, Signature: signature})
 	}
 
-	body := pick(event, encryptedProps)
+	body := pick(event, encryptedProps, mandatory)
 	if body == "" {
 		return out, nil
 	}
@@ -878,10 +985,10 @@ func sign(addrKR *crypto.KeyRing, body string) (string, error) {
 
 // pick renders the named properties as a standalone iCalendar object, or ""
 // when nothing beyond UID and DTSTAMP would be left — Proton expects such a
-// card to be omitted rather than sent empty.
-func pick(event *ical.Event, names []string) string {
+// card to be omitted rather than sent empty, unless it is mandatory.
+func pick(event *ical.Event, names []string, mandatory bool) string {
 	out := ical.NewEvent()
-	substantive := false
+	substantive := mandatory
 
 	for _, name := range names {
 		props, ok := event.Props[strings.ToUpper(name)]

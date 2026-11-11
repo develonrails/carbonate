@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	api "github.com/ProtonMail/go-proton-api"
 )
 
 // The shape Proton actually returns: each part is its own complete VCALENDAR
@@ -278,5 +280,101 @@ func TestPropertyName(t *testing.T) {
 		if got := name(line); got != want {
 			t.Errorf("name(%q) = %q, want %q", line, got, want)
 		}
+	}
+}
+
+// A reply made anywhere else has to reach the client.
+//
+// Proton records it in the clear list beside the event and nowhere near the
+// encrypted card, whose PARTSTAT stays at whatever the guest was invited
+// with. Without this the client never sees an answer — and writes the stale
+// one back on the next edit, which Proton then files as the guest's reply.
+func TestRepliesReachTheClient(t *testing.T) {
+	const token = "0123456789abcdef0123456789abcdef01234567"
+
+	properties := []string{
+		"UID:event@carbonate.local",
+		"ATTENDEE;PARTSTAT=NEEDS-ACTION;X-PM-TOKEN=" + token + ":mailto:alice@example.com",
+	}
+
+	got := applyReplies(properties, []api.CalendarAttendee{
+		{Token: token, Status: api.CalendarAttendeeStatus(statusAccepted)},
+	})
+
+	if !strings.Contains(got[1], "PARTSTAT=ACCEPTED") {
+		t.Errorf("the reply did not reach the attendee: %s", got[1])
+	}
+
+	if strings.Contains(got[1], "NEEDS-ACTION") {
+		t.Errorf("the stale status is still there: %s", got[1])
+	}
+
+	if !strings.Contains(got[1], "mailto:alice@example.com") {
+		t.Errorf("the address was lost: %s", got[1])
+	}
+}
+
+// An attendee Proton has no reply for keeps the status the card gave.
+func TestUnknownTokenKeepsItsStatus(t *testing.T) {
+	properties := []string{
+		"ATTENDEE;PARTSTAT=TENTATIVE;X-PM-TOKEN=aaaa:mailto:alice@example.com",
+	}
+
+	got := applyReplies(properties, []api.CalendarAttendee{
+		{Token: "bbbb", Status: api.CalendarAttendeeStatus(statusDeclined)},
+	})
+
+	if !strings.Contains(got[0], "PARTSTAT=TENTATIVE") {
+		t.Errorf("status was changed on an attendee Proton said nothing about: %s", got[0])
+	}
+}
+
+// An attendee with no PARTSTAT at all gets the reply added rather than
+// dropped.
+func TestReplyIsAddedWhenThereIsNoPartstat(t *testing.T) {
+	const token = "abcd"
+
+	got := applyReplies(
+		[]string{"ATTENDEE;X-PM-TOKEN=" + token + ":mailto:alice@example.com"},
+		[]api.CalendarAttendee{{Token: token, Status: api.CalendarAttendeeStatus(statusDeclined)}},
+	)
+
+	if !strings.Contains(got[0], "PARTSTAT=DECLINED") {
+		t.Errorf("the reply was not added: %s", got[0])
+	}
+}
+
+// A parameter value may be quoted and hold the very characters the split
+// looks for, so a naive search cuts the line in the wrong place.
+func TestSplitLineRespectsQuotedParameters(t *testing.T) {
+	line := `ATTENDEE;CN="Doe, Jan: boss";PARTSTAT=ACCEPTED:mailto:jan@example.com`
+
+	prop, params, value := splitLine(line)
+
+	if prop != "ATTENDEE" {
+		t.Errorf("name = %q", prop)
+	}
+
+	if len(params) != 2 {
+		t.Fatalf("params = %q, want two", params)
+	}
+
+	if got := param(params, "CN"); got != "Doe, Jan: boss" {
+		t.Errorf("CN = %q", got)
+	}
+
+	if value != "mailto:jan@example.com" {
+		t.Errorf("value = %q", value)
+	}
+
+	// And setting a parameter leaves the quoted one intact.
+	got := withParam(line, "PARTSTAT", "DECLINED")
+
+	if !strings.Contains(got, `CN="Doe, Jan: boss"`) {
+		t.Errorf("the quoted parameter was mangled: %s", got)
+	}
+
+	if strings.Contains(got, "ACCEPTED") {
+		t.Errorf("the old value is still there: %s", got)
 	}
 }

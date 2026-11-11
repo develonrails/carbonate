@@ -308,3 +308,47 @@ func TestDecodeAllSkipsOnlyTheUnreadableEvent(t *testing.T) {
 		t.Errorf("unreadable = %v, want [locked]", unreadable)
 	}
 }
+
+// decode has to apply the replies, not merely be able to.
+//
+// The reply lives in the clear list Proton keeps beside the event; the
+// encrypted attendee card holds the status the guest was invited with and
+// never changes. For a long time decode read the clear list only to count
+// it, so a client was shown an invitation nobody had answered — and sent the
+// stale answer back on the next edit, overwriting the real one.
+func TestDecodeAppliesReplies(t *testing.T) {
+	calKR, addrKR := keys(t)
+
+	const token = "0123456789abcdef0123456789abcdef01234567"
+
+	guests := "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:abc\r\n" +
+		"ATTENDEE;PARTSTAT=NEEDS-ACTION;X-PM-TOKEN=" + token + ":mailto:alice@example.com\r\n" +
+		"END:VEVENT\r\nEND:VCALENDAR"
+
+	encrypted, keyPacket := encryptPart(t, calKR, addrKR, guests)
+
+	raw := rawEvent{CalendarEvent: api.CalendarEvent{
+		ID:              "event-id",
+		UID:             "abc",
+		SharedKeyPacket: keyPacket,
+		AttendeesEvents: []api.CalendarEventPart{encrypted},
+		Attendees: []api.CalendarAttendee{
+			{Token: token, Status: api.CalendarAttendeeStatus(statusAccepted)},
+		},
+	}}
+
+	event, err := decode(raw, calKR, addrKR)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	ics := event.ICS()
+
+	if !strings.Contains(ics, "PARTSTAT=ACCEPTED") {
+		t.Errorf("the guest's reply never reached the client:\n%s", ics)
+	}
+
+	if strings.Contains(ics, "NEEDS-ACTION") {
+		t.Errorf("the stale status from the encrypted card is still being served:\n%s", ics)
+	}
+}

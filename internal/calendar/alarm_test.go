@@ -117,7 +117,7 @@ func TestAlarmRoundTrip(t *testing.T) {
 	event := parse(t, withAlarm)
 
 	e := Event{Alarms: alarmsOf(event)}
-	e.Properties = properties(pick(event, sharedEncrypted))
+	e.Properties = properties(pick(event, sharedEncrypted, false))
 
 	ics := e.ICS()
 
@@ -132,5 +132,60 @@ func TestAlarmRoundTrip(t *testing.T) {
 	// The alarm must sit inside the event, not beside it.
 	if strings.Index(ics, "BEGIN:VALARM") > strings.Index(ics, "END:VEVENT") {
 		t.Errorf("the alarm is outside the event:\n%s", ics)
+	}
+}
+
+// An alarm set for a fixed moment has to become an offset before it is sent.
+//
+// Proton's Trigger field holds a duration and nothing else, so an absolute
+// trigger stored verbatim is a reminder its own clients cannot read.
+func TestAbsoluteTriggerBecomesRelative(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		trigger string
+		want    string
+	}{
+		{"half an hour before", "20260930T083000Z", "-PT30M"},
+		{"a day and a bit before", "20260929T070000Z", "-P1DT2H"},
+		{"after the event starts", "20260930T091500Z", "PT15M"},
+		{"exactly at the start", "20260930T090000Z", "-PT0S"},
+		{"a whole week before", "20260923T090000Z", "-P7D"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ics := strings.Replace(withAlarm, "TRIGGER:-PT15M", "TRIGGER;VALUE=DATE-TIME:"+tc.trigger, 1)
+
+			got := alarmsOf(parse(t, ics))
+
+			if len(got) != 1 {
+				t.Fatalf("collected %d alarms, want 1", len(got))
+			}
+
+			if got[0].Trigger != tc.want {
+				t.Errorf("trigger = %q, want %q", got[0].Trigger, tc.want)
+			}
+		})
+	}
+}
+
+// A relative trigger is Proton's own format and must go through untouched.
+func TestRelativeTriggerIsLeftAlone(t *testing.T) {
+	for _, trigger := range []string{"-PT15M", "PT1H", "-P1DT2H30M"} {
+		ics := strings.Replace(withAlarm, "TRIGGER:-PT15M", "TRIGGER:"+trigger, 1)
+
+		got := alarmsOf(parse(t, ics))
+
+		if len(got) != 1 || got[0].Trigger != trigger {
+			t.Errorf("trigger %q came back as %+v", trigger, got)
+		}
+	}
+}
+
+// An alarm we cannot place in time is dropped rather than guessed at. A
+// reminder at the wrong moment is worse than one the user can see is gone.
+func TestUnplaceableAbsoluteTriggerIsDropped(t *testing.T) {
+	ics := strings.Replace(withAlarm, "TRIGGER:-PT15M", "TRIGGER;VALUE=DATE-TIME:not-a-time", 1)
+
+	if got := alarmsOf(parse(t, ics)); len(got) != 0 {
+		t.Errorf("alarms = %+v, want none", got)
 	}
 }

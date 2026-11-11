@@ -1,6 +1,8 @@
 package calendar
 
 import (
+	"context"
+	"encoding/base64"
 	"strings"
 	"testing"
 
@@ -52,7 +54,7 @@ func TestSplitLosesNoProperty(t *testing.T) {
 	got := make(map[string]bool)
 
 	for _, set := range [][]string{sharedSigned, append(sharedEncrypted, extra...), calendarSigned, calendarEncrypted} {
-		body := pick(event, set)
+		body := pick(event, set, false)
 		if body == "" {
 			continue
 		}
@@ -80,12 +82,12 @@ func TestUnknownPropertiesAreEncrypted(t *testing.T) {
 		t.Fatal("X-CUSTOM-THING was not detected as unknown")
 	}
 
-	signed := pick(event, sharedSigned) + pick(event, calendarSigned)
+	signed := pick(event, sharedSigned, false) + pick(event, calendarSigned, false)
 	if strings.Contains(signed, "X-CUSTOM-THING") {
 		t.Error("unknown property leaked into a signed, unencrypted card")
 	}
 
-	if !strings.Contains(pick(event, append(sharedEncrypted, extra...)), "X-CUSTOM-THING") {
+	if !strings.Contains(pick(event, append(sharedEncrypted, extra...), false), "X-CUSTOM-THING") {
 		t.Error("unknown property did not reach the encrypted card")
 	}
 }
@@ -157,12 +159,12 @@ END:VCALENDAR
 
 	// This event has no COMMENT, so the encrypted calendar card would hold
 	// only UID and DTSTAMP.
-	if body := pick(event, calendarEncrypted); body != "" {
+	if body := pick(event, calendarEncrypted, false); body != "" {
 		t.Errorf("empty card was rendered instead of omitted:\n%s", body)
 	}
 
 	// The shared signed card does have substance and must survive.
-	if body := pick(event, sharedSigned); body == "" {
+	if body := pick(event, sharedSigned, false); body == "" {
 		t.Error("shared signed card was omitted despite carrying DTSTART")
 	}
 }
@@ -177,7 +179,7 @@ func TestPickAlwaysCarriesIdentity(t *testing.T) {
 		"calendar signed":    calendarSigned,
 		"calendar encrypted": calendarEncrypted,
 	} {
-		body := pick(event, set)
+		body := pick(event, set, false)
 		if body == "" {
 			continue
 		}
@@ -199,7 +201,7 @@ func TestNormaliseSequenceEmitsBareValue(t *testing.T) {
 		t.Fatalf("normaliseSequence: %v", err)
 	}
 
-	body := pick(event, sharedSigned)
+	body := pick(event, sharedSigned, false)
 
 	if !strings.Contains(body, "SEQUENCE:0") {
 		t.Errorf("SEQUENCE was not emitted plainly:\n%s", body)
@@ -337,7 +339,12 @@ func TestNormaliseAddress(t *testing.T) {
 	for in, want := range map[string]string{
 		"mailto:Alice@Example.com": "alice@example.com",
 		"  bob@example.com  ":      "bob@example.com",
-		"MAILTO:x@y.z":             "mailto:x@y.z",
+
+		// A URI scheme is case-insensitive, and clients do shout it. This
+		// used to come back with the scheme still attached, which then
+		// travelled into the attendee's token and into the addresses Proton
+		// is asked for keys.
+		"MAILTO:x@y.z": "x@y.z",
 	} {
 		if got := normaliseAddress(in); got != want {
 			t.Errorf("normaliseAddress(%q) = %q, want %q", in, got, want)
@@ -375,12 +382,12 @@ func TestAttendeesAreNotInSignedCards(t *testing.T) {
 	event := parse(t, meeting)
 
 	for _, set := range [][]string{sharedSigned, calendarSigned} {
-		if body := pick(event, set); strings.Contains(body, "alice@example.com") {
+		if body := pick(event, set, false); strings.Contains(body, "alice@example.com") {
 			t.Errorf("an attendee leaked into a signed card:\n%s", body)
 		}
 	}
 
-	if body := pick(event, attendeeEncrypted); !strings.Contains(body, "alice@example.com") {
+	if body := pick(event, attendeeEncrypted, false); !strings.Contains(body, "alice@example.com") {
 		t.Errorf("the attendee part does not contain the attendee:\n%s", body)
 	}
 }
@@ -390,7 +397,7 @@ func TestAttendeesAreNotInSignedCards(t *testing.T) {
 func TestOrganizerStaysInTheSharedSignedCard(t *testing.T) {
 	event := parse(t, meeting)
 
-	if body := pick(event, sharedSigned); !strings.Contains(body, "ORGANIZER") {
+	if body := pick(event, sharedSigned, false); !strings.Contains(body, "ORGANIZER") {
 		t.Errorf("ORGANIZER is missing from the shared signed card:\n%s", body)
 	}
 }
@@ -406,5 +413,146 @@ func TestAttendeeIsNotTreatedAsUnknown(t *testing.T) {
 		if name == "ATTENDEE" {
 			t.Error("ATTENDEE was classified as an unknown property")
 		}
+	}
+}
+
+// A bare invitation: everything in it belongs to a signed card, so the
+// shared encrypted card would hold nothing but UID and DTSTAMP.
+const bareInvitation = `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//carbonate//test//EN
+BEGIN:VEVENT
+UID:bare@carbonate.local
+DTSTAMP:20260914T180000Z
+DTSTART:20260916T140000Z
+DTEND:20260916T150000Z
+SEQUENCE:0
+STATUS:CONFIRMED
+TRANSP:OPAQUE
+ORGANIZER:mailto:me@example.com
+ATTENDEE;PARTSTAT=NEEDS-ACTION:mailto:alice@example.com
+END:VEVENT
+END:VCALENDAR
+`
+
+// The shared part is sent whole even when there is nothing to put in it.
+//
+// Dropping the empty encrypted card used to drop the shared key packet with
+// it, and the guest list is encrypted under exactly that key: the event went
+// to Proton with a card nobody — the web app, another client, or carbonate
+// on the next read — could ever open again.
+func TestBareInvitationKeepsItsGuestListReadable(t *testing.T) {
+	keys := calendarKeys(t)
+
+	data, err := buildEvent(context.Background(), parse(t, bareInvitation), keys, nil, nil)
+	if err != nil {
+		t.Fatalf("buildEvent: %v", err)
+	}
+
+	if data.SharedKeyPacket == "" {
+		t.Fatal("no shared key packet was sent, so nothing can open the attendee card")
+	}
+
+	if len(data.SharedEventContent) != 2 {
+		t.Errorf("sent %d shared cards, want both the signed and the encrypted one", len(data.SharedEventContent))
+	}
+
+	if len(data.AttendeesEventContent) != 1 {
+		t.Fatalf("sent %d attendee cards, want 1", len(data.AttendeesEventContent))
+	}
+
+	packet, err := base64.StdEncoding.DecodeString(data.SharedKeyPacket)
+	if err != nil {
+		t.Fatalf("decoding the shared key packet: %v", err)
+	}
+
+	sessionKey, err := keys.CalKR.DecryptSessionKey(packet)
+	if err != nil {
+		t.Fatalf("the shared key packet does not open with the calendar key: %v", err)
+	}
+
+	body, err := base64.StdEncoding.DecodeString(data.AttendeesEventContent[0].Data)
+	if err != nil {
+		t.Fatalf("decoding the attendee card: %v", err)
+	}
+
+	guests, err := sessionKey.Decrypt(body)
+	if err != nil {
+		t.Fatalf("the attendee card does not open with the shared session key: %v", err)
+	}
+
+	if !strings.Contains(guests.GetString(), "alice@example.com") {
+		t.Errorf("the attendee card does not hold the guest:\n%s", guests.GetString())
+	}
+}
+
+// Proton folds an address before hashing it into a token, and carbonate has
+// to fold it the same way or the two name the same guest differently.
+func TestCanonicalAddressFollowsProton(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"mailto:John.Doe@Example.com", "john.doe@example.com"},
+		{"MAILTO:Jan@Example.com", "jan@example.com"},
+		{"John.Doe+cal@proton.me", "johndoe@proton.me"},
+		{"j_a-n@pm.me", "jan@pm.me"},
+		{"John.Doe+cal@gmail.com", "johndoe@gmail.com"},
+		{"John.Doe@googlemail.com", "johndoe@googlemail.com"},
+
+		// A dot means something outside the domains Proton folds.
+		{"john.doe+cal@fastmail.com", "john.doe+cal@fastmail.com"},
+
+		// Not an address at all; left as it came.
+		{"someone", "someone"},
+	} {
+		if got := canonicalAddress(tc.in); got != tc.want {
+			t.Errorf("canonicalAddress(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// Two spellings of one person must reach one token, because the token is the
+// only name Proton files their replies under.
+func TestTokenIgnoresSpelling(t *testing.T) {
+	uid := "event@carbonate.local"
+
+	if attendeeToken(uid, "John.Doe+cal@proton.me") != attendeeToken(uid, "johndoe@proton.me") {
+		t.Error("two spellings of one Proton address produced different tokens")
+	}
+
+	if attendeeToken(uid, "a@example.com") == attendeeToken(uid, "b@example.com") {
+		t.Error("two different addresses produced the same token")
+	}
+}
+
+// A token already on the attendee is Proton's, and is kept.
+//
+// Recomputing it would orphan every reply filed under the old one, and
+// carbonate cannot always rederive the address Proton made it from.
+func TestExistingAttendeeTokenIsKept(t *testing.T) {
+	keys := calendarKeys(t)
+
+	const theirs = "0123456789abcdef0123456789abcdef01234567"
+
+	ics := strings.Replace(
+		bareInvitation,
+		"ATTENDEE;PARTSTAT=NEEDS-ACTION:mailto:alice@example.com",
+		"ATTENDEE;PARTSTAT=ACCEPTED;X-PM-TOKEN="+theirs+":mailto:alice@example.com",
+		1,
+	)
+
+	data, err := buildEvent(context.Background(), parse(t, ics), keys, nil, nil)
+	if err != nil {
+		t.Fatalf("buildEvent: %v", err)
+	}
+
+	if len(data.Attendees) != 1 {
+		t.Fatalf("sent %d attendees, want 1", len(data.Attendees))
+	}
+
+	if data.Attendees[0].Token != theirs {
+		t.Errorf("token = %q, want the one the event already carried, %q", data.Attendees[0].Token, theirs)
+	}
+
+	if data.Attendees[0].Status != statusAccepted {
+		t.Errorf("status = %d, want the reply the event carried", data.Attendees[0].Status)
 	}
 }
